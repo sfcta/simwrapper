@@ -2,14 +2,12 @@ import { FileSystemConfig } from '@/Globals'
 
 const fileSystems: FileSystemConfig[] = [
   {
-    name: 'KoMoDnext',
-    slug: 'komodnext',
-    description: 'Automated driving in the digital test field, Düsseldorf',
-    description_de: 'Automatisiertes Fahren im digitalen Testfeld Düsseldorf',
+    name: 'Sample Data',
+    slug: 'samples',
+    description: 'Some test data for SFCTA',
     baseURL:
-      'https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/duesseldorf/projects/komodnext/website',
+      'https://svn.vsp.tu-berlin.de/repos/public-svn/shared/billy/simwrapper/sample-data',
     thumbnail: '/simwrapper/images/thumb-localfiles.jpg',
-    hidden: true,
   },
   {
     name: 'Localhost',
@@ -25,6 +23,7 @@ const fileSystems: FileSystemConfig[] = [
     baseURL: 'https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries',
     thumbnail: '/simwrapper/images/thumb-chart.jpg',
     skipList: ['episim/battery'],
+    hidden: true,
   },
 
   // {

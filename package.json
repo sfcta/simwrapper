@@ -9,7 +9,8 @@
     "test:unit": "vue-cli-service test:unit",
     "lint": "vue-cli-service lint",
     "deploy": "bash scripts/deploy-ghpages.sh matsim-vsp/simwrapper",
-    "deploy-asim": "bash scripts/deploy-ghpages.sh simwrapper/activitysim"
+    "deploy-asim": "bash scripts/deploy-ghpages.sh simwrapper/activitysim",
+    "deploy-sfcta": "bash scripts/deploy-ghpages.sh sfcta/simwrapper"
   },
   "dependencies": {
     "@aftersim/pako": "^1.0.11-3",
