@@ -5,8 +5,7 @@ const fileSystems: FileSystemConfig[] = [
     name: 'Sample Data',
     slug: 'samples',
     description: 'Some test data for SFCTA',
-    baseURL:
-      'https://svn.vsp.tu-berlin.de/repos/public-svn/shared/billy/simwrapper/sample-data',
+    baseURL: 'https://svn.vsp.tu-berlin.de/repos/public-svn/shared/billy/simwrapper/sample-data',
     thumbnail: '/simwrapper/images/thumb-localfiles.jpg',
   },
   {
@@ -25,32 +24,18 @@ const fileSystems: FileSystemConfig[] = [
     skipList: ['episim/battery'],
     hidden: true,
   },
-
-  // {
-  //   name: 'Gallery',
-  //   url: 'gallery',
-  //   description: 'Example visualizations of public datasets.',
-  //   svn:
-  //     'https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/viz-examples/examples',
-  //   need_password: false,
-  //   thumbnail: '/thumb-examples.jpg',
-  // },
-  // {
-  //   name: 'ils4 Math Cluster',
-  //   slug: 'ils4',
-  //   description: 'Mount cluster files using sshfs',
-  //   baseURL: 'http://localhost:8000/cluster',
-  //   needPassword: false,
-  //   thumbnail: '/images/thumb-cluster.png',
-  // },
-  // {
-  //   name: 'Apache (Local)',
-  //   slug: 'apache',
-  //   description: 'Run Apache locally',
-  //   baseURL: 'http://localhost',
-  //   needPassword: true,
-  //   thumbnail: '/images/thumbnail.png',
-  // },
 ]
+
+for (let port = 8000; port < 8500; port++) {
+  fileSystems.push({
+    name: 'Localhost ' + port,
+    slug: `${port}`,
+    description: 'Localhost ' + port,
+    description_de: 'Localhost ' + port,
+    baseURL: 'http://localhost:' + port,
+    thumbnail: '/simwrapper/images/thumb-localfiles.jpg',
+    hidden: true,
+  })
+}
 
 export default fileSystems

@@ -127,7 +127,7 @@ export default new Vuex.Store({
         }
       }
     },
-    clearError(state: { statusErrors: any[] }, value: number) {
+    clearError(state: GlobalState, value: number) {
       if (state.statusErrors.length >= value) {
         state.statusErrors.splice(value, 1) // remove one element
       }
@@ -154,7 +154,6 @@ export default new Vuex.Store({
     setLocale(state: GlobalState, value: string) {
       state.locale = value.toLocaleLowerCase()
       localStorage.setItem('locale', state.locale)
-      console.log('NEW LOCALE:', state.locale)
     },
   },
 
