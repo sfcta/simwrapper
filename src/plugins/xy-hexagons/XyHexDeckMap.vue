@@ -11,8 +11,9 @@ import colormap from 'colormap'
 // import SelectableHexagonLayer from './SelectableHexLayer'
 import { pointToHexbin } from './HexagonAggregator'
 
+import globalStore from '@/store'
+
 import LayerManager from '@/js/LayerManager'
-import { MAP_STYLES } from '@/Globals'
 
 const material = {
   ambient: 0.64,
@@ -82,7 +83,7 @@ export default class VueComponent extends Vue {
       container: `#${this.mapID}`,
       viewState: this.$store.state.viewState,
       pickingRadius: 3,
-      mapStyle: this.props.dark ? MAP_STYLES.dark : MAP_STYLES.light,
+      mapStyle: globalStore.getters.mapStyle,
       getTooltip: this.getTooltip,
       onViewStateChange: ({ viewState }: any) => {
         this.$store.commit('setMapCamera', viewState)

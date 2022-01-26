@@ -83,13 +83,7 @@ import LegendBox from './LegendBox.vue'
 import DrawingTool from '@/components/DrawingTool/DrawingTool.vue'
 import ZoomButtons from '@/components/ZoomButtons.vue'
 
-import {
-  FileSystem,
-  FileSystemConfig,
-  ColorScheme,
-  VisualizationPlugin,
-  MAP_STYLES,
-} from '@/Globals'
+import { FileSystem, FileSystemConfig, ColorScheme, VisualizationPlugin } from '@/Globals'
 
 import GzipWorker from '@/workers/GzipFetcher.worker?worker'
 
@@ -252,7 +246,7 @@ class MyComponent extends Vue {
 
     this.removeAttachedRoutes()
 
-    this.mymap.setStyle(this.isDarkMode ? MAP_STYLES.dark : MAP_STYLES.light)
+    this.mymap.setStyle(globalStore.getters.mapStyle)
 
     this.mymap.on('style.load', () => {
       if (this._geoTransitLinks) this.addTransitToMap(this._geoTransitLinks)
@@ -378,7 +372,7 @@ class MyComponent extends Vue {
 
     // 2. try to get it from config
     const outputConfigs = files.filter(
-      (f) => f.indexOf('.output_config.xml') > -1 || f.indexOf('.output_config_reduced.xml') > -1
+      f => f.indexOf('.output_config.xml') > -1 || f.indexOf('.output_config_reduced.xml') > -1
     )
     if (outputConfigs.length && this.myState.fileSystem) {
       console.log('trying to find CRS in', outputConfigs[0])
@@ -473,7 +467,7 @@ class MyComponent extends Vue {
         bearing: 0,
         container: this.mapID,
         logoPosition: 'bottom-left',
-        style: this.isDarkMode ? MAP_STYLES.dark : MAP_STYLES.light,
+        style: globalStore.getters.mapStyle,
         pitch: 0,
       })
 

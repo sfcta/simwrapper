@@ -345,6 +345,7 @@ class MyPlugin extends Vue {
       bearing: 0,
       pitch: 0,
       zoom: 8,
+      jump: true,
     })
     // done! show the first column
     this.handleNewDataColumn(this.shapefile.header[0])

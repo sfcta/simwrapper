@@ -41,7 +41,6 @@ import proj4 from 'proj4'
 import ShapeWrite from 'shp-write'
 
 import LayerManager from '@/js/LayerManager'
-import { MAP_STYLES } from '@/Globals'
 import globalStore from '@/store'
 
 @Component({ i18n, components: {} })
@@ -268,7 +267,7 @@ export default class VueComponent extends Vue {
   left: 0;
   width: 100%;
   height: 100%;
-  z-index: 0;
+  z-index: 1;
 }
 
 .map {
@@ -284,11 +283,12 @@ export default class VueComponent extends Vue {
   background-color: var(--bgPanel);
   pointer-events: all;
   padding: 0.5rem 1rem;
-  z-index: 10;
+  z-index: 0;
   position: absolute;
   top: 6px;
   right: 31px;
-  box-shadow: 0px 2px 5px #22222233;
+  filter: $filterShadow;
+  border-radius: 3px;
 }
 
 .drawing-tool {
@@ -322,7 +322,6 @@ export default class VueComponent extends Vue {
   flex-direction: column;
   top: 5.5rem;
   right: 4px;
-  z-index: 15;
 }
 
 .buttons {

@@ -16,13 +16,11 @@ const fileSystems: FileSystemConfig[] = [
     thumbnail: '/simwrapper/images/thumb-localfiles.jpg',
   },
   {
-    name: 'Public Scenarios',
-    slug: 'public',
-    description: 'Simulation results from VSP at TU-Berlin',
-    baseURL: 'https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries',
-    thumbnail: '/simwrapper/images/thumb-chart.jpg',
-    skipList: ['episim/battery'],
-    hidden: true,
+    name: 'SFCTA Prospector',
+    slug: 'champ',
+    description: 'Shared SFCTA CHAMP model runs',
+    baseURL: 'http://prospector/champ_runs',
+     hidden: true,
   },
 ]
 

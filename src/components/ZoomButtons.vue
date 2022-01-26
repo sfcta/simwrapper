@@ -26,8 +26,8 @@
 <script lang="ts">
 const i18n = {
   messages: {
-    en: { in: 'Zoom in', out: 'Zoom out', center: 'Recenter' },
-    de: { in: 'Einzoomen', out: 'Auszoomen', center: 'zentrieren' },
+    en: { in: 'Zoom in', out: 'Zoom out', center: 'North' },
+    de: { in: 'Einzoomen', out: 'Auszoomen', center: 'Norden' },
   },
 }
 
@@ -115,6 +115,7 @@ export default class VueComponent extends Vue {
 .zoom-buttons {
   margin-left: auto;
   pointer-events: auto;
+  z-index: 2;
 }
 
 .button-single:last-child {
@@ -148,7 +149,7 @@ export default class VueComponent extends Vue {
 }
 
 .map-scale {
-  margin: 0.15rem 0.3rem 0 0;
+  margin: 0.15rem 0.5rem 0 0;
 }
 
 @media only screen and (max-width: 640px) {

@@ -91,15 +91,16 @@ class SVNFileSystem {
     // This can throw lots of errors; we are not going to catch them
     // here so the code further up can deal with errors properly.
     // "Throw early, catch late."
-    let stillScaryPath = scaryPath
+    let stillScaryPath = scaryPath.replaceAll('//', '/')
 
     // don't download any files!
     if (!stillScaryPath.endsWith('/')) stillScaryPath += '/'
 
     // Use cached version if we have it
     const cachedEntry = CACHE[this.urlId][stillScaryPath]
-    if (cachedEntry) return cachedEntry
-
+    if (cachedEntry) {
+      return cachedEntry
+    }
     // Generate and cache the listing
     const response = await this._getFileResponse(stillScaryPath).then()
     const htmlListing = await response.text()
@@ -123,9 +124,13 @@ class SVNFileSystem {
     const pathChunks = folder.split('/')
     for (const chunk of pathChunks) {
       currentPath = `${currentPath}${chunk}/`
-      const { dirs } = await this.getDirectory(currentPath)
-      if (dirs.indexOf(YAML_FOLDER) > -1)
-        configFolders.push(`${currentPath}/${YAML_FOLDER}`.replaceAll('//', '/'))
+      try {
+        const { dirs } = await this.getDirectory(currentPath)
+        if (dirs.indexOf(YAML_FOLDER) > -1)
+          configFolders.push(`${currentPath}/${YAML_FOLDER}`.replaceAll('//', '/'))
+      } catch (e) {
+        // doesn't matter, skip if it can't read it
+      }
     }
 
     // also add current working folder as final option, which supercedes all others
@@ -144,15 +149,15 @@ class SVNFileSystem {
 
       micromatch
         .match(files, dashboard)
-        .map((yaml) => (yamls.dashboards[yaml] = `${configFolder}/${yaml}`.replaceAll('//', '/')))
+        .map(yaml => (yamls.dashboards[yaml] = `${configFolder}/${yaml}`.replaceAll('//', '/')))
 
       micromatch
         .match(files, topsheet)
-        .map((yaml) => (yamls.topsheets[yaml] = `${configFolder}/${yaml}`.replaceAll('//', '/')))
+        .map(yaml => (yamls.topsheets[yaml] = `${configFolder}/${yaml}`.replaceAll('//', '/')))
 
       micromatch
         .match(files, viz)
-        .map((yaml) => (yamls.vizes[yaml] = `${configFolder}/${yaml}`.replaceAll('//', '/')))
+        .map(yaml => (yamls.vizes[yaml] = `${configFolder}/${yaml}`.replaceAll('//', '/')))
     }
 
     // Sort them all by filename
@@ -166,16 +171,34 @@ class SVNFileSystem {
       Object.entries(yamls.vizes).sort((a, b) => (a[0] > b[0] ? 1 : -1))
     )
 
-    console.log(yamls)
+    // console.log(yamls)
     return yamls
   }
 
   private buildListFromHtml(data: string): DirectoryEntry {
-    if (data.indexOf('SimpleWebServer') > -1) return this.buildListFromSimpleWebServer(data)
     if (data.indexOf('<ul>') > -1) return this.buildListFromSVN(data)
+    if (data.indexOf('SimpleWebServer') > -1) return this.buildListFromSimpleWebServer(data)
     if (data.indexOf('<table>') > -1) return this.buildListFromApache24(data)
+    if (data.indexOf('<pre>') > -1) return this.buildListFromNGINX(data)
 
     return { dirs: [], files: [] }
+  }
+
+  private buildListFromNGINX(data: string): DirectoryEntry {
+    const dirs = []
+    const files = []
+
+    const lines = data.split('\n')
+    for (const line of lines) {
+      const start = line.indexOf('<a href="')
+      if (start < 0) continue
+      const entry = line.substring(start + 9, line.indexOf('">'))
+      if (!entry) continue
+
+      if (entry.endsWith('/')) dirs.push(entry.substring(0, entry.length - 1))
+      else files.push(entry)
+    }
+    return { dirs, files }
   }
 
   private buildListFromSimpleWebServer(data: string): DirectoryEntry {

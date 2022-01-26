@@ -13,8 +13,6 @@
     //- these are sections defined by viz-summary.yml etc
     .curated-sections
 
-      b: a(v-if="xsubfolder" @click="openOutputFolder('..')") ^ UP
-
       //- this is the content of readme.md, if it exists
       .readme-header
         .curate-content.markdown(
@@ -33,7 +31,7 @@
                   @click="openOutputFolder(folder)")
             p
               i.fa.fa-folder-open
-              | &nbsp;{{ folder }}
+              | &nbsp;{{ cleanName(folder) }}
 
       topsheets-finder(:fileSystemConfig="myState.svnProject" :subfolder="xsubfolder" :files="myState.files")
 
@@ -65,7 +63,7 @@
         .file-table
           .file(:class="{fade: myState.isLoading}"
                 v-for="file in myState.files" :key="file")
-            a(:href="`${myState.svnProject.baseURL}/${myState.subfolder}/${file}`") {{ file }}
+            a(:href="`${myState.svnProject.baseURL}/${myState.subfolder}/${file}`") {{ cleanName(file) }}
 
 </template>
 
@@ -114,7 +112,6 @@ import yaml from 'yaml'
 
 import globalStore from '@/store'
 import plugins from '@/plugins/pluginRegistry'
-import TabbedDashboardView from '@/views/TabbedDashboardView.vue'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
 import { BreadCrumb, FileSystemConfig, YamlConfigs } from '@/Globals'
 import TopsheetsFinder from '@/components/TopsheetsFinder/TopsheetsFinder.vue'
@@ -125,11 +122,9 @@ const allComponents = Object.assign({ TopsheetsFinder }, plugins)
   components: allComponents,
 })
 export default class VueComponent extends Vue {
-  @Prop({ required: false })
-  private xsubfolder!: string
-
-  @Prop({ required: true })
-  private root!: string
+  @Prop({ required: false }) private xsubfolder!: string
+  @Prop({ required: true }) private root!: string
+  @Prop({ required: true }) private allConfigFiles!: YamlConfigs
 
   @Prop({ required: true })
   private allConfigFiles!: YamlConfigs
@@ -149,6 +144,10 @@ export default class VueComponent extends Vue {
     subfolder: '',
     vizes: [],
     summary: false,
+  }
+
+  private cleanName(text: string) {
+    return decodeURIComponent(text)
   }
 
   private getFileSystem(name: string) {
@@ -229,6 +228,7 @@ export default class VueComponent extends Vue {
   }
 
   @Watch('xsubfolder')
+  @Watch('allConfigFiles')
   private updateRoute() {
     const svnProject = this.getFileSystem(this.root)
 
@@ -380,6 +380,16 @@ export default class VueComponent extends Vue {
 
       const allVizes = Object.values(mergedFilesAndVizes)
 
+      // Also show any project-level viz thumbnails from other folders
+      // (but, ensure that files in this folder supercede any project viz files
+      // with the same name)
+      const mergedFilesAndVizes = Object.assign({}, this.allConfigFiles.vizes)
+      for (const file of files) {
+        mergedFilesAndVizes[file] = file
+      }
+
+      const allVizes = Object.values(mergedFilesAndVizes)
+
       this.myState.errorStatus = ''
       this.myState.folders = folders
       this.myState.files = allVizes
@@ -427,7 +437,13 @@ export default class VueComponent extends Vue {
       root: this.myState.svnProject.slug,
       xsubfolder: target,
     }
-    this.$emit('navigate', { component: 'TabbedDashboardView', props })
+
+    // if we are at top of hierarchy, jump to splashpage
+    if (!target && !this.myState.subfolder) {
+      this.$emit('navigate', { component: 'SplashPage', props: {} })
+    } else {
+      this.$emit('navigate', { component: 'TabbedDashboardView', props })
+    }
   }
 }
 </script>
