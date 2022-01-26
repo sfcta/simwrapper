@@ -126,9 +126,6 @@ export default class VueComponent extends Vue {
   @Prop({ required: true }) private root!: string
   @Prop({ required: true }) private allConfigFiles!: YamlConfigs
 
-  @Prop({ required: true })
-  private allConfigFiles!: YamlConfigs
-
   private globalState = globalStore.state
 
   private mdRenderer = new markdown()
@@ -348,7 +345,7 @@ export default class VueComponent extends Vue {
       console.log(subsubfolder)
       const contents = await this.myState.svnRoot.getDirectory(subsubfolder)
       const matches = micromatch(contents.files, split[1])
-      return matches.map((f) => split[0] + '/' + f)
+      return matches.map(f => split[0] + '/' + f)
     } catch (e) {
       // oh well, we tried
     }
@@ -367,18 +364,8 @@ export default class VueComponent extends Vue {
       const folderContents = await this.myState.svnRoot.getDirectory(this.myState.subfolder)
 
       // hide dot folders
-      const folders = folderContents.dirs.filter((f) => !f.startsWith('.')).sort()
-      const files = folderContents.files.filter((f) => !f.startsWith('.')).sort()
-
-      // Also show any project-level viz thumbnails from other folders
-      // (but, ensure that files in this folder supercede any project viz files
-      // with the same name)
-      const mergedFilesAndVizes = Object.assign({}, this.allConfigFiles.vizes)
-      for (const file of files) {
-        mergedFilesAndVizes[file] = file
-      }
-
-      const allVizes = Object.values(mergedFilesAndVizes)
+      const folders = folderContents.dirs.filter(f => !f.startsWith('.')).sort()
+      const files = folderContents.files.filter(f => !f.startsWith('.')).sort()
 
       // Also show any project-level viz thumbnails from other folders
       // (but, ensure that files in this folder supercede any project viz files
