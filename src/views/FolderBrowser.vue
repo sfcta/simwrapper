@@ -547,6 +547,7 @@ h4 {
   margin: 0.25rem 0rem;
   padding: 0.75rem 1rem;
   border-radius: 8px;
+  word-wrap: break-word;
 }
 
 .folder:hover {
