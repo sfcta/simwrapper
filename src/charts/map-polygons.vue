@@ -2,6 +2,13 @@
 .map-layout
   polygon-and-circle-map.choro-map(:props="mapProps")
   zoom-buttons
+  //- viz-configurator(v-if="isLoaded"
+  //-   :vizDetails="vizDetails"
+  //-   :datasets="datasets"
+  //-   :fileSystem="fileSystemConfig"
+  //-   :subfolder="subfolder"
+  //-   :yamlConfig="config"
+  //-   @update="changeConfiguration")
 
   .config-bar
     img.img-button(@click="useCircles=false"
@@ -49,6 +56,7 @@ export default class VueComponent extends Vue {
 
   private maxValue = 1000
   private expColors = false
+  private isLoaded = false
 
   private get mapProps() {
     return {
@@ -64,16 +72,22 @@ export default class VueComponent extends Vue {
   }
 
   private async mounted() {
-    this.expColors = this.config.exponentColors
+    try {
+      this.expColors = this.config.exponentColors
 
-    this.fileApi = new HTTPFileSystem(this.fileSystemConfig)
-    // bulmaSlider.attach()
+      this.fileApi = new HTTPFileSystem(this.fileSystemConfig)
+      // bulmaSlider.attach()
 
-    // load the boundaries and the dataset, use promises so we can clear
-    // the spinner when things are finished
-    await Promise.all([this.loadBoundaries(), this.loadDataset()])
-    this.updateChart()
+      // load the boundaries and the dataset, use promises so we can clear
+      // the spinner when things are finished
+      await Promise.all([this.loadBoundaries(), this.loadDataset()])
 
+      this.updateChart()
+    } catch (e) {
+      this.$store.commit('error', '' + e)
+    }
+
+    this.isLoaded = true
     this.$emit('isLoaded')
   }
 
@@ -139,9 +153,10 @@ export default class VueComponent extends Vue {
         this.boundaries = boundaries.features
       }
     } catch (e) {
-      console.error(e)
-      return
+      console.warn(e)
+      throw Error(`Could not load "${this.config.boundaries}"`)
     }
+    if (!this.boundaries) throw Error(`"features" not found in boundaries file`)
     this.calculateCentroids()
   }
 
@@ -197,6 +212,10 @@ export default class VueComponent extends Vue {
     let vMax = -1
     this.boundaries.forEach(boundary => {
       const lookupValue = boundary.properties[idColumn]
+      if (lookupValue === undefined) {
+        this.$store.commit('error', `Boundary is missing property "${idColumn}"`)
+      }
+
       const row = lookup[lookupValue]
       if (row === undefined) {
         boundary.properties.value = 'N/A'

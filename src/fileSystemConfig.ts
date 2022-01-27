@@ -2,17 +2,17 @@ import { FileSystemConfig } from '@/Globals'
 
 const fileSystems: FileSystemConfig[] = [
   {
-    name: 'SFCTA Prospector',
-    slug: 'champ',
-    description: 'Shared CHAMP model runs',
-    baseURL: 'http://prospector/champ_runs',
-  },
-  {
     name: 'Localhost',
     slug: 'local',
     description: 'Run "simwrapper serve" to browse files on your PC',
     baseURL: 'http://localhost:8000',
     thumbnail: '/simwrapper/images/thumb-localfiles.jpg',
+  },
+  {
+    name: 'SFCTA Prospector',
+    slug: 'champ',
+    description: 'Shared CHAMP model runs',
+    baseURL: 'http://prospector/champ_runs',
   },
   {
     name: 'Sample Data',

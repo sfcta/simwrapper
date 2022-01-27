@@ -122,6 +122,15 @@ export default new Vuex.Store({
       if (!value.jump) state.viewState = value
       else if (state.viewState.initial) state.viewState = value
     },
+    error(state: GlobalState, value: string) {
+      if (
+        // don't repeat yourself
+        !state.statusErrors.length ||
+        state.statusErrors[state.statusErrors.length - 1] !== value
+      ) {
+        state.statusErrors.push(value)
+      }
+    },
     setStatus(state: GlobalState, value: { type: Status; msg: string }) {
       if (value.type === Status.INFO) {
         state.statusMessage = value.msg
