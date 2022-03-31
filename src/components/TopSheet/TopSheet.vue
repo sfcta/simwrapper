@@ -29,18 +29,11 @@ export type TableRow = {
 
 @Component({ components: {} })
 export default class VueComponent extends Vue {
-  @Prop({ required: true })
-  private fileSystemConfig!: FileSystemConfig
-
-  @Prop({ required: true })
-  private subfolder!: string
-
+  @Prop({ required: true }) private fileSystemConfig!: FileSystemConfig
+  @Prop({ required: true }) private subfolder!: string
   @Prop({ required: true }) private files!: string[]
-
   @Prop({ required: true }) private yaml!: string
-
   @Prop({ required: true }) private allConfigFiles!: YamlConfigs
-
   @Prop({ required: false }) private cardId?: string
 
   private solverThread!: any
@@ -122,7 +115,6 @@ export default class VueComponent extends Vue {
       this.table = []
       // this.table = [{ title: message, value: '', style: { backgroundColor: 'yellow' } }]
     }
-    this.$emit('isLoaded')
   }
 
   private processWorkerMessage(message: MessageEvent) {
@@ -137,9 +129,11 @@ export default class VueComponent extends Vue {
         break
       case 'results':
         this.table = data.results
+        this.$emit('isLoaded')
         break
       default:
         // shouldn't be here
+        this.$emit('isLoaded')
         console.error(data)
     }
   }

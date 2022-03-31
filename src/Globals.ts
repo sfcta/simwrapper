@@ -51,6 +51,7 @@ export interface DataTableColumn {
 
 /** LookupDataset bridges CSV data and link data with the join column containing array offsets */
 export interface LookupDataset {
+  datasetKey: string
   dataTable: DataTable
   activeColumn: string
   csvRowFromLinkRow: number[]
@@ -65,13 +66,14 @@ export interface CSV {
 
 export type VizLayerConfiguration = {
   datasets: { [id: string]: string }
-  display: { color: any; width: any }
+  display: { color: any; width: any; fill: any }
 }
 
 export type YamlConfigs = {
   dashboards: { [filename: string]: string }
   topsheets: { [filename: string]: string }
   vizes: { [filename: string]: string }
+  configs: { [filename: string]: string }
 }
 
 export const UI_FONT =
@@ -97,6 +99,7 @@ export interface FileSystemConfig {
   skipList?: string[]
   dashboardFolder?: string
   hidden?: boolean
+  handle?: FileSystemAPIHandle
 }
 
 export interface VisualizationPlugin {
@@ -110,6 +113,7 @@ export interface VisualizationPlugin {
 export interface DirectoryEntry {
   files: string[]
   dirs: string[]
+  handles: { [name: string]: FileSystemAPIHandle }
 }
 
 export enum ColorScheme {
@@ -120,6 +124,11 @@ export enum ColorScheme {
 export interface BreadCrumb {
   label: string
   url?: string
+}
+
+export interface Warnings {
+  msg: string
+  desc?: string
 }
 
 export interface ColorSet {
@@ -199,6 +208,13 @@ export interface RunYaml {
       options?: number[]
     }[]
   }[]
+}
+
+export interface FileSystemAPIHandle {
+  name: string
+  values: any // returns { kind: string; name: string; getFile: any }[]
+  getFile: any
+  requestPermission: any
 }
 
 export const LIGHT_MODE: ColorSet = {

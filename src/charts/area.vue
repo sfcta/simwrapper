@@ -9,7 +9,6 @@ VuePlotly.myplot(
 
 <script lang="ts">
 import { Vue, Component, Watch, Prop } from 'vue-property-decorator'
-import { isNumeric } from 'vega-lite'
 
 import VuePlotly from '@/components/VuePlotly.vue'
 import DashboardDataManager from '@/js/DashboardDataManager'
@@ -35,6 +34,7 @@ export default class VueComponent extends Vue {
   private id = 'area-' + Math.random()
 
   private async mounted() {
+    this.updateLayout()
     this.updateTheme()
     this.dataSet = await this.loadData()
     this.updateChart()
@@ -49,13 +49,19 @@ export default class VueComponent extends Vue {
     this.layout = Object.assign({}, this.layout, dimensions)
   }
 
-  @Watch('globalState.isDarkMode') updateTheme() {
+  @Watch('globalState.isDarkMode')
+  updateTheme() {
     const colors = {
-      paper_bgcolor: this.globalState.isDarkMode ? '#282c34' : '#fff',
-      plot_bgcolor: this.globalState.isDarkMode ? '#282c34' : '#fff',
+      paper_bgcolor: this.globalState.isDarkMode ? '#242627' : '#fff',
+      plot_bgcolor: this.globalState.isDarkMode ? '#242627' : '#fff',
       font: { color: this.globalState.isDarkMode ? '#cccccc' : '#444444' },
     }
     this.layout = Object.assign({}, this.layout, colors)
+  }
+
+  private updateLayout() {
+    this.layout.xaxis.title.text = this.config.xAxisTitle || this.config.xAxisName || ''
+    this.layout.yaxis.title.text = this.config.yAxisTitle || this.config.yAxisName || ''
   }
 
   private async loadData() {
@@ -153,20 +159,28 @@ export default class VueComponent extends Vue {
 
   private layout: any = {
     height: 300,
-    margin: { t: 25, b: 0, l: 0, r: 0 },
+    margin: { t: 8, b: 0, l: 0, r: 0, pad: 2 },
+    font: {
+      color: '#444444',
+      family: UI_FONT,
+    },
     xaxis: {
-      // title: {
-      //   text: this.config.x,
-      //   // standoff: 0,
-      // },
       automargin: true,
+      autorange: true,
+      title: { text: '', standoff: 12 },
+      animate: true,
+    },
+    yaxis: {
+      automargin: true,
+      autorange: true,
+      title: { text: '', standoff: 16 },
+      animate: true,
       showgrid: false,
     },
-    yaxis: { automargin: true, showgrid: false },
-    legend: { orientation: 'h' }, // , yanchor: 'bottom', y: -0.4 },
-    font: {
-      family: UI_FONT,
-      color: '#444444',
+    legend: {
+      orientation: 'v',
+      x: 1,
+      y: 1,
     },
   }
 
@@ -193,9 +207,8 @@ export default class VueComponent extends Vue {
     toImageButtonOptions: {
       format: 'png', // one of png, svg, jpeg, webp
       filename: 'area-chart',
-      width: 1200,
-      height: 800,
-      scale: 1.0, // Multiply title/legend/axis/canvas sizes by this factor
+      width: null,
+      height: null,
     },
   }
 }

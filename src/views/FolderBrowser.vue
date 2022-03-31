@@ -33,8 +33,6 @@
               i.fa.fa-folder-open
               | &nbsp;{{ cleanName(folder) }}
 
-      topsheets-finder(:fileSystemConfig="myState.svnProject" :subfolder="xsubfolder" :files="myState.files")
-
       //- thumbnails of each viz and image in this folder
       h3.curate-heading(v-if="myState.vizes.length") {{ $t('Analysis')}}
 
@@ -55,6 +53,11 @@
                     :style="{'pointer-events': viz.component==='image-view' ? 'auto' : 'none'}"
                     @title="updateTitle(index, $event)")
               p {{ viz.title }}
+
+      //- TODO calculation tables
+      //-       this.allConfigFiles = await this.fileSystem.findAllYamlConfigs(this.subfolder)
+      //- return Object.values(this.allConfigFiles.topsheets)
+
 
       // individual links to files in this folder
       h3.curate-heading(v-if="myState.files.length") {{$t('Files')}}
@@ -128,7 +131,11 @@ export default class VueComponent extends Vue {
 
   private globalState = globalStore.state
 
-  private mdRenderer = new markdown()
+  private mdRenderer = new markdown({
+    html: true,
+    linkify: true,
+    typographer: true,
+  })
 
   private myState: IMyState = {
     errorStatus: '',
@@ -231,6 +238,7 @@ export default class VueComponent extends Vue {
 
     this.myState.svnProject = svnProject
     this.myState.subfolder = this.xsubfolder || ''
+    this.myState.readme = ''
 
     if (!this.myState.svnProject) return
     this.myState.svnRoot = new HTTPFileSystem(this.myState.svnProject)
@@ -269,10 +277,9 @@ export default class VueComponent extends Vue {
   }
 
   private async showReadme() {
+    this.myState.readme = ''
     const readme = 'readme.md'
-    if (this.myState.files.indexOf(readme) === -1) {
-      this.myState.readme = ''
-    } else {
+    if (this.myState.files.map(f => f.toLocaleLowerCase()).indexOf(readme) > -1) {
       if (!this.myState.svnRoot) return
       const text = await this.myState.svnRoot.getFileText(this.myState.subfolder + '/' + readme)
       this.myState.readme = this.mdRenderer.render(text)
@@ -440,7 +447,7 @@ export default class VueComponent extends Vue {
 
 .vessel {
   margin: 0 auto;
-  padding: 0rem 3rem 2rem 3rem;
+  padding: 0rem 1rem 2rem 1rem;
   max-width: $sizeVessel;
 }
 
@@ -495,6 +502,7 @@ h4 {
   position: relative;
   z-index: 1;
   flex: 1;
+  min-height: $thumbnailHeight;
   border-radius: 16px;
   overflow: hidden;
   display: flex;

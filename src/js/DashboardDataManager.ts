@@ -15,9 +15,11 @@ import { rollup } from 'd3-array'
 
 import { DataTable, FileSystemConfig, Status } from '@/Globals'
 import globalStore from '@/store'
+import { findMatchingGlobInFiles } from '@/js/util'
 import HTTPFileSystem from './HTTPFileSystem'
 
 import DataFetcherWorker from '@/workers/DataFetcher.worker.ts?worker'
+import RoadNetworkLoader from '@/workers/RoadNetworkLoader.worker.ts?worker'
 
 interface configuration {
   dataset: string
@@ -31,6 +33,12 @@ interface configuration {
   x?: string
 }
 
+interface NetworkLinks {
+  source: Float32Array
+  dest: Float32Array
+  linkIds: any[]
+}
+
 export default class DashboardDataManager {
   constructor(...args: string[]) {
     // hello
@@ -39,7 +47,17 @@ export default class DashboardDataManager {
     this.fileApi = this.getFileSystem(this.root)
   }
 
-  public async getFilteredDataset(config: { dataset: string; groupBy?: string; value?: string }) {
+  public kill() {
+    for (const worker of this.threads) worker.terminate()
+  }
+
+  public async getFilteredDataset(config: { dataset: string }) {
+    // console.log(config.dataset)
+    const filteredRows = this.datasets[config.dataset].filteredRows
+    return { filteredRows }
+  }
+
+  public async OLDgetFiltered(config: { dataset: string; groupBy?: string; value?: string }) {
     const rows = this.datasets[config.dataset].filteredRows
     if (!rows) return { filteredRows: null }
 
@@ -87,14 +105,12 @@ export default class DashboardDataManager {
       }
 
       let myDataset = await this.datasets[config.dataset].dataset
-      let columns = Object.keys(myDataset)
 
       let allRows = { ...myDataset }
 
       // remove ignored columns
       if (config.ignoreColumns) {
         config.ignoreColumns.forEach(column => {
-          console.log(column)
           delete allRows[column]
         })
       }
@@ -102,36 +118,60 @@ export default class DashboardDataManager {
       // if useLastRow, do that
       if (config.useLastRow) {
         Object.keys(allRows).forEach(colName => {
-          allRows[colName] = myDataset[colName].values[columns.length - 1]
+          const values = myDataset[colName].values
+          allRows[colName] = values[values.length - 1]
         })
       }
 
       return { allRows }
-
-      if (config.value && config.groupBy) {
-        // grouping/filtering enabled
-        let bars: any = {}
-        const columnValues = config.value
-        const columnGroups = config.groupBy
-        // TODO: Fix this!
-
-        // bars = rollup(
-        //   allRows,
-        //   v => v.reduce((a, b) => a + b[columnValues], 0),
-        //   (d: any) => d[columnGroups] // group-by
-        // )
-        // const x = Array.from(bars.keys())
-        // const y = Array.from(bars.values())
-        // return { x, y }
-        // #
-      } else {
-        // no grouping/filtering
-        return { allRows }
-      }
     } catch (e) {
-      const message = '' + e
+      // const message = '' + e
       return { allRows: {} }
     }
+  }
+
+  public setPreloadedDataset(props: { key: string; dataTable: DataTable; filename: string }) {
+    this.datasets[props.filename] = {
+      dataset: new Promise<DataTable>((resolve, reject) => {
+        resolve(props.dataTable)
+      }),
+      activeFilters: {},
+      filteredRows: null,
+      filterListeners: new Set(),
+    }
+  }
+
+  /**
+   *
+   * @param path Full path/filename to the network file
+   * @returns network (format TBA)
+   */
+  public async getRoadNetwork(path: string) {
+    // first, get the dataset
+    if (!this.networks[path]) {
+      console.log('load network:', path)
+
+      // get folder
+      let folder =
+        path.indexOf('/') > -1 ? path.substring(0, path.lastIndexOf('/')) : this.subfolder
+
+      // get file path search pattern
+      const { files } = await new HTTPFileSystem(this.fileApi).getDirectory(folder)
+      let pattern = path.indexOf('/') === -1 ? path : path.substring(path.lastIndexOf('/') + 1)
+      const match = findMatchingGlobInFiles(files, pattern)
+
+      if (match.length === 1) {
+        // fetchNetwork immediately returns a Promise<>, which we wait on so that
+        // multiple views don't all try to fetch the network individually
+        this.networks[path] = this.fetchNetwork(`${folder}/${match[0]}`)
+      } else {
+        throw Error('File not found: ' + path)
+      }
+    } else {
+    }
+
+    let network = await this.networks[path]
+    return network
   }
 
   // /**
@@ -188,16 +228,20 @@ export default class DashboardDataManager {
   // }
 
   public setFilter(dataset: string, column: string, value: any) {
-    console.log('Filtering dataset:', dataset)
+    // Filter might be single or an array; make it an array.
+    const values = Array.isArray(value) ? value : [value]
 
     const allFilters = this.datasets[dataset].activeFilters
-    if (allFilters[column] !== undefined && allFilters[column] === value) {
+    // a second click on a filter means REMOVE this filter.
+    // if (allFilters[column] !== undefined && allFilters[column] === values) {
+    //   console.log('A1', allFilters[column])
+    //   delete allFilters[column]
+    // } else
+    if (!values.length) {
       delete allFilters[column]
     } else {
       allFilters[column] = value
     }
-    this.datasets[dataset].activeFilters = allFilters
-
     this.updateFilters(dataset) // this is async
   }
 
@@ -216,27 +260,46 @@ export default class DashboardDataManager {
   }
 
   public clearCache() {
+    this.kill() // any stragglers must die
     this.datasets = {}
   }
 
   // ---- PRIVATE STUFFS -----------------------
 
   private async updateFilters(datasetId: string) {
-    const dataset = this.datasets[datasetId]
+    const metaData = this.datasets[datasetId]
 
-    if (!Object.keys(dataset.activeFilters).length) {
-      dataset.filteredRows = null
-    } else {
-      const allRows = (await dataset.dataset).rows
-
-      // TODO: fix this!
-      // let filteredRows = allRows
-      // for (const [column, value] of Object.entries(dataset.activeFilters)) {
-      //   console.log('filtering:', column, value)
-      //   filteredRows = filteredRows.filter(row => row[column] === value)
-      // }
-      // dataset.filteredRows = filteredRows
+    if (!Object.keys(metaData.activeFilters).length) {
+      metaData.filteredRows = null
+      this.notifyListeners(datasetId)
+      return
     }
+
+    // Let's do this the stupid way first, and make it better once we get it working.
+    const dataset = await metaData.dataset
+    const allColumns = Object.keys(dataset)
+    let filteredRows: any[] = []
+
+    const numberOfRowsInFullDataset = dataset[allColumns[0]].values.length
+    // console.log('FILTERS', metaData.activeFilters)
+    // console.log('NROWS', numberOfRowsInFullDataset)
+
+    for (const [column, values] of Object.entries(metaData.activeFilters)) {
+      if (filteredRows.length) {
+        filteredRows = filteredRows.filter(row => values.includes(row[column]))
+      } else {
+        for (let i = 0; i < numberOfRowsInFullDataset; i++) {
+          if (values.includes(dataset[column].values[i])) {
+            const row = {} as any
+            allColumns.forEach(col => (row[col] = dataset[col].values[i]))
+            filteredRows.push(row)
+          }
+        }
+      }
+    }
+
+    // console.log('FROWS', filteredRows)
+    metaData.filteredRows = filteredRows
     this.notifyListeners(datasetId)
   }
 
@@ -250,6 +313,8 @@ export default class DashboardDataManager {
   // private thread!: any
   private files: any[] = []
 
+  private threads: Worker[] = []
+
   private async fetchDataset(config: { dataset: string }) {
     if (!this.files.length) {
       const { files } = await new HTTPFileSystem(this.fileApi).getDirectory(this.subfolder)
@@ -257,8 +322,9 @@ export default class DashboardDataManager {
     }
 
     return new Promise<DataTable>((resolve, reject) => {
+      const thread = new DataFetcherWorker()
+      this.threads.push(thread)
       try {
-        const thread = new DataFetcherWorker()
         thread.postMessage({
           fileSystemConfig: this.fileApi,
           subfolder: this.subfolder,
@@ -267,15 +333,47 @@ export default class DashboardDataManager {
         })
 
         thread.onmessage = e => {
+          thread.terminate()
           if (e.data.error) {
-            console.log(666, e.data.error)
-            globalStore.commit('setStatus', { type: Status.ERROR, msg: e.data.error })
+            console.log(e.data.error)
+            // var msg = '' + e.data.error
+            //globalStore.commit('error', e.data.error)
+            globalStore.commit('setStatus', {
+              type: Status.ERROR,
+              msg: `File cannot be loaded...`,
+              desc: 'Check filename and path: ' + this.subfolder + '/' + config.dataset,
+            })
             reject()
           }
-
           resolve(e.data)
         }
       } catch (err) {
+        thread.terminate()
+        console.error(err)
+        reject(err)
+      }
+    })
+  }
+
+  private async fetchNetwork(path: string) {
+    return new Promise<NetworkLinks>((resolve, reject) => {
+      const thread = new RoadNetworkLoader()
+      try {
+        thread.postMessage({
+          filePath: path,
+          fileSystem: this.fileApi,
+        })
+
+        thread.onmessage = e => {
+          thread.terminate()
+          if (e.data.error) {
+            console.error(e.data.error)
+            reject()
+          }
+          resolve(e.data.links)
+        }
+      } catch (err) {
+        thread.terminate()
         console.error(err)
         reject(err)
       }
@@ -305,4 +403,6 @@ export default class DashboardDataManager {
       filterListeners: Set<any>
     }
   } = {}
+
+  private networks: { [id: string]: Promise<NetworkLinks> } = {}
 }

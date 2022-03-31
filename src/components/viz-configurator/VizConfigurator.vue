@@ -136,6 +136,7 @@ export default class VueComponent extends Vue {
       color: {},
       width: {},
       circle: {},
+      fill: {},
       // outline: {},
       label: {},
     },

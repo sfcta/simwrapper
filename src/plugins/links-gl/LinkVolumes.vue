@@ -5,21 +5,23 @@
 
   .plot-container(v-if="!thumbnail")
     link-gl-layer.map-area(
+        :viewId="linkLayerId"
         :links="geojsonData"
+        :colorRampType="colorRampType"
         :build="csvData"
         :base="csvBase"
-        :colors="generatedColors"
-        :colorRampType="colorRampType"
         :widths="csvWidth"
+        :widthsBase="csvWidthBase"
         :dark="isDarkMode"
+        :newColors="colorArray"
+        :newWidths="widthArray"
         :scaleWidth="scaleWidth"
-        :showDiffs="vizDetails.showDifferences"
-        :viewId="linkLayerId"
     )
 
     zoom-buttons(v-if="!thumbnail")
     drawing-tool(v-if="!thumbnail")
 
+    //- color/width/etc panel
     viz-configurator(v-if="!thumbnail && isDataLoaded"
       :vizDetails="vizDetails"
       :datasets="datasets"
@@ -39,14 +41,13 @@
 
       .panel-items(v-show="csvWidth.activeColumn")
 
-        //- button/dropdown for selecting column
+        //- slider/dropdown for selecting column
         .panel-item.config-section
           selector-panel(
             :vizDetails="vizDetails"
             :csvData="csvWidth"
             :scaleWidth="scaleWidth"
             :showDiffs="vizDetails.showDifferences"
-            @colors="clickedColorRamp"
             @column="handleNewDataColumn"
             @slider="handleNewDataColumn"
           )
@@ -90,6 +91,10 @@ const i18n = {
 }
 import { Vue, Component, Prop, Watch } from 'vue-property-decorator'
 import { ToggleButton } from 'vue-js-toggle-button'
+import { rgb } from 'd3-color'
+import { scaleThreshold, scaleOrdinal } from 'd3-scale'
+import { shallowEqualObjects } from 'shallow-equal'
+
 import readBlob from 'read-blob'
 import YAML from 'yaml'
 
@@ -105,8 +110,7 @@ import DrawingTool from '@/components/DrawingTool/DrawingTool.vue'
 import VizConfigurator from '@/components/viz-configurator/VizConfigurator.vue'
 import ZoomButtons from '@/components/ZoomButtons.vue'
 
-import DataFetcher from '@/workers/DataFetcher.worker.ts?worker'
-import RoadNetworkLoader from '@/workers/RoadNetworkLoader.worker.ts?worker'
+// import AttributeCalculator from './attributeCalculator.worker.ts?worker'
 
 import {
   ColorScheme,
@@ -120,6 +124,7 @@ import {
 import { ColorDefinition } from '@/components/viz-configurator/Colors.vue'
 import { WidthDefinition } from '@/components/viz-configurator/Widths.vue'
 import { DatasetDefinition } from '@/components/viz-configurator/AddDatasets.vue'
+import DashboardDataManager from '@/js/DashboardDataManager'
 
 const LOOKUP_COLUMN = '_LINK_OFFSET_'
 
@@ -143,6 +148,7 @@ class MyPlugin extends Vue {
   @Prop({ required: false }) yamlConfig!: string
   @Prop({ required: false }) config!: any
   @Prop({ required: false }) thumbnail!: boolean
+  @Prop({ required: false }) datamanager!: DashboardDataManager
 
   // this contains the display settings for this view; it is the View Model.
   // use changeConfiguration to modify this for now (todo: move to state model)
@@ -159,6 +165,8 @@ class MyPlugin extends Vue {
     network: '',
     geojsonFile: '',
     projection: '',
+    center: null,
+    zoom: 9,
     widthFactor: null as any,
     thumbnail: '',
     sum: false,
@@ -197,16 +205,25 @@ class MyPlugin extends Vue {
   }
 
   private csvData: LookupDataset = {
+    datasetKey: '',
     activeColumn: '',
     dataTable: {},
     csvRowFromLinkRow: [],
   }
   private csvBase: LookupDataset = {
+    datasetKey: '',
     activeColumn: '',
     dataTable: {},
     csvRowFromLinkRow: [],
   }
   private csvWidth: LookupDataset = {
+    datasetKey: '',
+    activeColumn: '',
+    dataTable: {},
+    csvRowFromLinkRow: [],
+  }
+  private csvWidthBase: LookupDataset = {
+    datasetKey: '',
     activeColumn: '',
     dataTable: {},
     csvRowFromLinkRow: [],
@@ -217,6 +234,10 @@ class MyPlugin extends Vue {
 
   private isDarkMode = this.$store.state.colorScheme === ColorScheme.DarkMode
   private isDataLoaded = false
+
+  private setDataIsLoaded() {
+    this.isDataLoaded = true
+  }
 
   public buildFileApi() {
     const filesystem = this.getFileSystem(this.root)
@@ -326,7 +347,10 @@ class MyPlugin extends Vue {
   }
 
   @Watch('$store.state.colorScheme') private swapTheme() {
-    this.isDarkMode = this.$store.state.colorScheme === ColorScheme.DarkMode
+    setTimeout(
+      () => (this.isDarkMode = this.$store.state.colorScheme === ColorScheme.DarkMode),
+      100
+    )
   }
 
   private arrayBufferToBase64(buffer: any) {
@@ -345,10 +369,6 @@ class MyPlugin extends Vue {
 
   private toggleShowDiffs() {
     this.vizDetails.showDifferences = !this.vizDetails.showDifferences
-  }
-
-  private clickedColorRamp(color: string) {
-    // this.selectedColorRamp = color
   }
 
   /**
@@ -397,11 +417,42 @@ class MyPlugin extends Vue {
     // }, 150)
   }
 
-  private handleNewWidth(width: WidthDefinition) {
-    const { columnName, dataset, scaleFactor } = width
-    if (!columnName) return
+  private currentWidthDefinition: WidthDefinition = { columnName: '' }
 
+  private handleNewWidth(width: WidthDefinition) {
+    // if definition hasn't changed, do nothing
+    if (shallowEqualObjects(width, this.currentWidthDefinition)) {
+      return
+    }
+
+    const { columnName, dataset, scaleFactor } = width
+
+    // if dataset is set to None, just set scale to 0 and we're done
+    if (!dataset) {
+      this.scaleWidth = 0
+      return
+    }
+
+    // change scaling factor without recalculating anything:
     if (scaleFactor !== undefined) this.scaleWidth = scaleFactor
+
+    // if everything else is the same, don't recalculate anything
+    let recalculate = true
+
+    if (!columnName) recalculate = false
+
+    if (
+      width.columnName === this.currentWidthDefinition.columnName &&
+      width.dataset === this.currentWidthDefinition.dataset
+    ) {
+      recalculate = false
+    }
+
+    // save settings
+    this.currentWidthDefinition = width
+
+    // this part takes longer to calculate. only do it if we have to
+    if (!recalculate) return
 
     const selectedDataset = dataset ? this.datasets[dataset] : this.csvWidth.dataTable
     if (!selectedDataset) return
@@ -409,6 +460,8 @@ class MyPlugin extends Vue {
     if (this.csvWidth.dataTable !== selectedDataset) {
       this.csvWidth.dataTable = selectedDataset
       this.csvWidth.activeColumn = columnName
+      // this.csvWidthBase.dataTable = selectedDataset
+      this.csvWidthBase.activeColumn = columnName
     }
 
     const dataColumn = selectedDataset[columnName]
@@ -416,10 +469,12 @@ class MyPlugin extends Vue {
 
     // Tell Vue we have new data
     this.csvWidth = {
+      datasetKey: dataset || this.csvWidth.datasetKey,
       dataTable: selectedDataset,
       activeColumn: columnName,
       csvRowFromLinkRow: dataset ? this.csvRowLookupFromLinkRow[dataset] : [],
     }
+    this.generateWidthArray()
   }
 
   private handleNewColor(color: ColorDefinition) {
@@ -427,7 +482,7 @@ class MyPlugin extends Vue {
 
     const columnName = color.columnName
     if (!columnName) {
-      // this.csvData.activeColumn = ''
+      this.generateColorArray()
       return
     }
 
@@ -437,6 +492,7 @@ class MyPlugin extends Vue {
 
     if (this.csvData.dataTable !== selectedDataset) {
       this.csvData = {
+        datasetKey,
         dataTable: selectedDataset,
         activeColumn: '',
         csvRowFromLinkRow: this.csvRowLookupFromLinkRow[datasetKey],
@@ -451,10 +507,24 @@ class MyPlugin extends Vue {
     this.csvBase.activeColumn = column.name
 
     this.isButtonActiveColumn = false
+    this.generateColorArray()
   }
 
   private async setMapCenter() {
     const data = this.geojsonData
+
+    if (this.vizDetails.center) {
+      this.$store.commit('setMapCamera', {
+        longitude: this.vizDetails.center[0],
+        latitude: this.vizDetails.center[1],
+        bearing: 0,
+        pitch: 0,
+        zoom: this.vizDetails.zoom,
+        jump: false,
+      })
+      return
+    }
+
 
     if (!data.source.length) return
 
@@ -464,7 +534,7 @@ class MyPlugin extends Vue {
 
     const numLinks = data.source.length / 2
 
-    const gap = 2048
+    const gap = 4096
     for (let i = 0; i < numLinks; i += gap) {
       longitude += data.source[i * 2]
       latitude += data.source[i * 2 + 1]
@@ -482,11 +552,13 @@ class MyPlugin extends Vue {
         latitude,
         bearing: 0,
         pitch: 0,
-        zoom: 7,
+        zoom: 9,
         jump: false,
       })
     }
   }
+
+  private myDataManager!: DashboardDataManager
 
   private async mounted() {
     this.$store.commit('setFullScreen', !this.thumbnail)
@@ -496,6 +568,10 @@ class MyPlugin extends Vue {
     this.myState.subfolder = this.subfolder
 
     this.buildFileApi()
+
+    // DataManager might be passed in from the dashboard; or we might be
+    // in single-view mode, in which case we need to create one for ourselves
+    this.myDataManager = this.datamanager || new DashboardDataManager(this.root, this.subfolder)
 
     await this.getVizDetails()
 
@@ -515,40 +591,29 @@ class MyPlugin extends Vue {
 
   private async loadNetwork(): Promise<any> {
     this.myState.statusMessage = 'Loading network...'
-    // this.linkOffsetLookup = {}
-    this.numLinks = 0
 
     const filename = this.vizDetails.network || this.vizDetails.geojsonFile
     const networkPath = `/${this.myState.subfolder}/${filename}`
 
-    this.networkWorker = new RoadNetworkLoader() as Worker
+    try {
+      const network = await this.myDataManager.getRoadNetwork(networkPath)
 
-    this.networkWorker.onmessage = (buffer: MessageEvent) => {
-      if (this.networkWorker) this.networkWorker.terminate()
-      if (buffer.data.error) {
-        this.myState.statusMessage = buffer.data.error
-        this.$store.commit('setStatus', {
-          type: Status.ERROR,
-          msg: `Error loading: ${networkPath}`,
-        })
-      } else {
-        // this.linkOffsetLookup = buffer.data.linkOffsetLookup
-        this.geojsonData = buffer.data.links
-        this.numLinks = this.geojsonData.source.length / 2
+      this.numLinks = network.linkIds.length
+      this.geojsonData = network
 
-        console.log('links', this.geojsonData)
+      this.setMapCenter() // this could be off main thread
 
-        // runs in background
-        this.setMapCenter()
+      this.myState.statusMessage = ''
 
-        this.myState.statusMessage = ''
+      this.$emit('isLoaded', true)
+      // this.setDataIsLoaded()
 
-        // then load CSVs in background
-        this.loadCSVFiles()
-      }
+      // then load CSVs in background
+      this.loadCSVFiles()
+    } catch (e) {
+      this.$store.commit('error', `Could not load ${networkPath}`)
+      this.$emit('isLoaded')
     }
-
-    this.networkWorker.postMessage({ filePath: networkPath, fileSystem: this.myState.fileSystem })
   }
 
   private dataLoaderWorkers: Worker[] = []
@@ -586,7 +651,6 @@ class MyPlugin extends Vue {
     // Create a LOOKUP array which links this CSV data to the network links
     // loop through all network links, we need the CSV row for each link.
     const getCsvRowNumberFromLinkRowNumber: number[] = []
-    console.log({ geo: this.geojsonData })
     for (let linkRow = 0; linkRow < this.geojsonData.linkIds.length; linkRow++) {
       const linkId = this.geojsonData.linkIds[linkRow]
       const csvRow = tempMapLinkIdToCsvRow[linkId]
@@ -601,6 +665,111 @@ class MyPlugin extends Vue {
     if (filename) this.vizDetails.datasets[key] = filename
     this.datasets = Object.assign({ ...this.datasets }, { [key]: dataTable })
     this.handleDatasetisLoaded(key)
+  }
+
+  @Watch('vizDetails.showDifferences')
+  private generateWidthArray() {
+    const numLinks = this.geojsonData.linkIds.length
+    const widths = new Float32Array(numLinks)
+
+    const widthValues = this.csvWidth?.dataTable[this.csvWidth.activeColumn]?.values
+    const baseValues = this.csvBase?.dataTable[this.csvBase.activeColumn]?.values
+
+    const width = (i: number) => {
+      const csvRow = this.csvWidth.csvRowFromLinkRow[i]
+      const value = widthValues[csvRow]
+
+      if (this.vizDetails.showDifferences) {
+        const baseRow = this.csvBase.csvRowFromLinkRow[i]
+        const baseValue = baseValues[baseRow]
+        const diff = Math.abs(value - baseValue)
+        return diff
+      } else {
+        return value
+      }
+    }
+
+    for (let i = 0; i < numLinks; i++) {
+      widths[i] = width(i)
+    }
+    this.widthArray = widths
+  }
+
+  @Watch('vizDetails.showDifferences')
+  private generateColorArray() {
+    // deck.gl colors must be in rgb[] or rgba[] format
+    const colorsAsRGB: any = this.generatedColors.map(hexcolor => {
+      const c = rgb(hexcolor)
+      return [c.r, c.g, c.b, 255]
+    })
+
+    // Build breakpoints between 0.0 - 1.0 to match the number of color swatches
+    // e.g. If there are five colors, then we need 4 breakpoints: 0.2, 0.4, 0.6, 0.8.
+    // An exponent reduces visual dominance of very large values at the high end of the scale
+    const exponent = 4.0
+    const domain = new Array(this.generatedColors.length - 1)
+      .fill(0)
+      .map((v, i) => Math.pow((1 / this.generatedColors.length) * (i + 1), exponent))
+
+    // *scaleOrdinal* is the d3 function that maps categorical variables to colors.
+    // *scaleThreshold* is the d3 function that maps numerical values from [0.0,1.0) to the color buckets
+    // *range* is the list of colors;
+    // *domain* is the list of breakpoints in the 0-1.0 continuum; it is auto-created from data for categorical.
+    // *colorRampType* is 0 if a categorical color ramp is chosen
+    const buildData = this.csvData.dataTable
+    const baseData = this.csvBase.dataTable
+    const activeColumn = this.csvData.activeColumn
+
+    const buildColumn: DataTableColumn = buildData[activeColumn] || { values: [] }
+    const baseColumn: DataTableColumn = baseData[activeColumn] || { values: [] }
+
+    const isCategorical = this.colorRampType === 0 || buildColumn.type == DataType.STRING
+    const setColorBasedOnValue: any = isCategorical
+      ? scaleOrdinal().range(colorsAsRGB)
+      : scaleThreshold().range(colorsAsRGB).domain(domain)
+
+    const numLinks = this.geojsonData.linkIds.length
+    const colors = new Uint8Array(4 * numLinks)
+
+    const colorPaleGrey = globalStore.state.isDarkMode ? [80, 80, 80, 96] : [212, 212, 212, 40]
+    const colorInvisible = [0, 0, 0, 0]
+
+    const color = (i: number) => {
+      // if (!buildData[this.csvData.activeColumn]) return colorPaleGrey
+
+      const csvRow = this.csvData.csvRowFromLinkRow[i]
+      let value = buildData[this.csvData.activeColumn]?.values[csvRow]
+
+      if (this.generatedColors.length === 1) return colorsAsRGB[0]
+      if (!value) return colorInvisible
+      if (isCategorical) return setColorBasedOnValue(value)
+
+      if (this.vizDetails.showDifferences) {
+        const baseRow = this.csvBase.csvRowFromLinkRow[i]
+        const baseValue = baseData[activeColumn].values[baseRow]
+        const diff = value - baseValue
+
+        if (diff === 0) return colorPaleGrey // setColorBasedOnValue(0.5)
+
+        // red vs. blue
+        if (this.isDarkMode) {
+          return diff > 0 ? [255, 64, 64, 255] : [64, 96, 255, 255] // red vs. blue
+        } else {
+          return diff > 0 ? [255, 0, 0, 255] : [32, 64, 255, 255] // red vs. blue
+        }
+      } else {
+        // don't use log scale if numbers are below 1.0
+        let ratio = value / (buildColumn.max || 1.0)
+        // if (ratio < 0.0001) return colorPaleGrey
+        return setColorBasedOnValue(ratio)
+      }
+    }
+
+    for (let i = 0; i < numLinks; i++) {
+      colors.set(color(i), i * 4)
+    }
+
+    this.colorArray = colors
   }
 
   private loadCSVFiles() {
@@ -628,6 +797,7 @@ class MyPlugin extends Vue {
   private showSimpleNetworkWithNoDatasets() {
     // no datasets; we are just showing the bare network
     this.csvData = {
+      datasetKey: '',
       dataTable: {
         [LOOKUP_COLUMN]: {
           name: LOOKUP_COLUMN,
@@ -645,26 +815,14 @@ class MyPlugin extends Vue {
     this.csvData.dataTable[LOOKUP_COLUMN].values = lookup
 
     this.myState.statusMessage = ''
-    this.isDataLoaded = true
-  }
+    this.setDataIsLoaded()
 
-  private async finishedLoadingCSV(key: string, dataTable: DataTable) {
-    console.log('loaded', key)
-    this.myState.statusMessage = 'Analyzing...'
-
-    // const rowZero = parsed.data[0] as string[]
-    // const header = rowZero.slice(1) // skip first column with link id's
-    // if (this.vizDetails.useSlider) header.unshift(`${this.$t('all')}`)
-
-    // const details: DataTable = {
-    //   allLinks
-    //   headerMax: this.vizDetails.useSlider ? new Array(header.length).fill(globalMax) : [],
-    //   rows: allLinks,
-    //   activeColumn: -1,
-    // }
-
-    this.datasets = Object.assign({ ...this.datasets }, { [key]: dataTable })
-    this.handleNewDataset({ key, dataTable })
+    const color: ColorDefinition = {
+      generatedColors: this.generatedColors,
+      dataset: '',
+      columnName: '',
+    }
+    this.changeConfiguration({ color })
   }
 
   private handleDatasetisLoaded(datasetId: string) {
@@ -673,17 +831,24 @@ class MyPlugin extends Vue {
     if (datasetId === 'csvBase' || datasetId === 'base') {
       // is base dataset:
       this.csvBase = {
+        datasetKey: datasetId,
         dataTable: this.datasets[datasetId],
         csvRowFromLinkRow: this.csvRowLookupFromLinkRow[datasetId],
         activeColumn: '',
       }
-      // this.vizDetails.showDifferences = true
+      this.csvWidthBase = {
+        datasetKey: datasetId,
+        dataTable: this.datasets[datasetId],
+        csvRowFromLinkRow: this.csvRowLookupFromLinkRow[datasetId],
+        activeColumn: '',
+      }
     } else if (this.csvData.activeColumn === '') {
       // is first non-base dataset:
       // set a default view, if user didn't pass anything in
       if (!this.vizDetails.display.color && !this.vizDetails.display.width) {
         const firstColumnName = Object.values(this.datasets[datasetId])[0].name
         this.csvData = {
+          datasetKey: datasetId,
           dataTable: this.datasets[datasetId],
           csvRowFromLinkRow: this.csvRowLookupFromLinkRow[datasetId],
           activeColumn: firstColumnName,
@@ -693,49 +858,62 @@ class MyPlugin extends Vue {
 
     // last dataset
     if (datasetKeys.length === Object.keys(this.vizDetails.datasets).length) {
-      this.isDataLoaded = true
+      this.setDataIsLoaded()
       this.myState.statusMessage = ''
       console.log({ DATASETS: this.datasets })
     }
   }
 
+  private colorArray: Uint8Array = new Uint8Array()
+  private widthArray: Float32Array = new Float32Array()
+
   private async loadOneCSVFile(key: string, filename: string) {
     if (!this.myState.fileApi) return
 
-    const { files } = await this.myState.fileApi.getDirectory(this.myState.subfolder)
+    try {
+      const dataset = await this.myDataManager.getDataset({ dataset: filename })
+      const dataTable = dataset.allRows
 
-    const thread = new Promise<DataTable>((resolve, reject) => {
-      const worker = new DataFetcher() as Worker
-      this.dataLoaderWorkers.push(worker) // so we can terminate them all on destroy
+      console.log('loaded', key)
+      this.myState.statusMessage = 'Analyzing...'
 
-      try {
-        worker.onmessage = e => {
-          worker.terminate()
-          resolve(e.data)
-        }
-        worker.postMessage({
-          fileSystemConfig: this.myState.fileSystem,
-          subfolder: this.myState.subfolder,
-          files: files,
-          config: { dataset: filename },
-        })
-      } catch (err) {
-        worker.terminate()
-        reject(err)
+      // remove columns without names; we can't use them
+      const cleanTable: DataTable = {}
+      for (const key of Object.keys(dataTable)) {
+        if (key) cleanTable[key] = dataTable[key]
       }
-    })
 
-    const dataTable = await thread
-
-    this.finishedLoadingCSV(key, dataTable)
+      this.datasets = Object.assign({ ...this.datasets }, { [key]: cleanTable })
+      this.handleNewDataset({ key, dataTable: cleanTable })
+    } catch (e) {
+      this.$store.commit('error', 'Could not load ' + filename)
+      this.$emit('isLoaded')
+    }
   }
 
-  private handleNewDataColumn(columnName: any) {
-    console.log(columnName)
+  private handleNewDataColumn(value: { dataset: LookupDataset; column: string }) {
+    const { dataset, column } = value
 
-    const width: WidthDefinition = { ...this.vizDetails.display.width }
-    width.columnName = columnName
-    this.changeConfiguration({ width })
+    // selector is attached to a dataset. Both color and width could be
+    // impacted, if they are attached to that dataset.
+
+    const config: any = {}
+
+    // WIDTHS
+    if (dataset.datasetKey === this.csvWidth.datasetKey) {
+      const width: WidthDefinition = { ...this.vizDetails.display.width }
+      width.columnName = column
+      config.width = width
+    }
+
+    // COLORS
+    if (dataset.datasetKey === this.csvData.datasetKey) {
+      const color: ColorDefinition = { ...this.vizDetails.display.color }
+      color.columnName = column
+      config.color = color
+    }
+
+    this.changeConfiguration(config)
   }
 }
 

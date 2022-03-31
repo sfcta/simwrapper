@@ -77,7 +77,11 @@ export default class VueComponent extends Vue {
       else this.updateChartSimple()
     } catch (e) {
       const msg = '' + e
-      this.$store.commit('setStatus', { type: Status.ERROR, msg })
+      this.$store.commit('setStatus', {
+        type: Status.ERROR,
+        msg,
+        desc: 'Add a desription...',
+      })
     }
   }
 
@@ -87,28 +91,47 @@ export default class VueComponent extends Vue {
 
   private updateChartSimple() {
     const allRows = this.dataSet.allRows || {}
-    console.log({ allRows })
+
     this.data[0].labels = Object.keys(allRows)
     this.data[0].values = Object.values(allRows)
   }
 
   private layout: any = {
     height: 300,
-    margin: { t: 30, b: 5, l: 0, r: 0 },
-    legend: { orientation: 'h' }, // , yanchor: 'bottom', y: -0.4 },
+    margin: { t: 8, b: 0, l: 0, r: 0, pad: 2 },
     font: {
-      family: UI_FONT,
       color: '#444444',
+      family: UI_FONT,
+    },
+    xaxis: {
+      automargin: true,
+      autorange: true,
+      title: { text: '', standoff: 12 },
+      animate: true,
+    },
+    yaxis: {
+      automargin: true,
+      autorange: true,
+      title: { text: '', standoff: 16 },
+      animate: true,
+    },
+    legend: {
+      // yanchor: 'top',
+      // xanchor: 'center',
+      orientation: 'v',
+      x: 1,
+      y: 1,
     },
   }
 
   // format hover ?
   private data = [
     {
+      sort: false, // to keep colors consistent across plots
       labels: [] as any[],
       values: [] as any[],
       type: 'pie',
-      hole: 0.2,
+      hole: 0.1,
       textinfo: 'label+percent',
       textposition: 'inside',
       automargin: true,
@@ -135,9 +158,8 @@ export default class VueComponent extends Vue {
     toImageButtonOptions: {
       format: 'png', // one of png, svg, jpeg, webp
       filename: 'pie-chart',
-      width: 1200,
-      height: 800,
-      scale: 1.0, // Multiply title/legend/axis/canvas sizes by this factor
+      width: null,
+      height: null,
     },
   }
 }

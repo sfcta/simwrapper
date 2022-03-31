@@ -3,11 +3,19 @@ import Vuex, { Store } from 'vuex'
 
 Vue.use(Vuex)
 
-import { BreadCrumb, ColorScheme, FileSystemConfig, Status, VisualizationPlugin } from '@/Globals'
+import {
+  BreadCrumb,
+  Warnings,
+  ColorScheme,
+  FileSystemConfig,
+  Status,
+  VisualizationPlugin,
+} from '@/Globals'
 import fileSystems from '@/fileSystemConfig'
 import { MAP_STYLES_ONLINE, MAP_STYLES_OFFLINE } from '@/Globals'
 import { debounce } from '@/js/util'
 import SVNFileSystem from './js/HTTPFileSystem'
+import { StaticReadUsage } from 'three'
 
 // ----------------------------------------
 
@@ -19,95 +27,77 @@ const initialViewState = () => ({
   maxZoom: 22,
   longitude: -122.4,
   latitude: 37.78,
-  zoom: 11,
+  zoom: 10,
 })
-
-interface GlobalState {
-  app: string
-  authAttempts: number
-  breadcrumbs: BreadCrumb[]
-  credentials: { [url: string]: string }
-  colorScheme: string
-  debug: boolean
-  isFullScreen: boolean
-  isDarkMode: boolean
-  locale: string
-  mapLoaded: boolean
-  mapStyles: { light: string; dark: string }
-  needLoginForUrl: string
-  resizeEvents: number
-  runFolders: { [root: string]: { path: string }[] }
-  runFolderCount: number
-  statusErrors: string[]
-  statusMessage: string
-  svnProjects: FileSystemConfig[]
-  visualizationTypes: Map<string, VisualizationPlugin>
-  viewState: {
-    initial?: boolean
-    jump?: boolean
-    longitude: number
-    latitude: number
-    zoom: number
-    pitch: number
-    bearing: number
-    maxZoom?: number
-  }
-}
 
 export default new Vuex.Store({
   state: {
-    app: 'SimWrapper', //  / SIMdex / SimWrapper / Scout', // 'S • C • O • U • T',
+    app: 'SimWrapper',
     debug: false,
     authAttempts: 0,
     breadcrumbs: [] as BreadCrumb[],
     credentials: { fake: 'fake' } as { [url: string]: string },
+    dashboardWidth: '',
     isFullScreen: false,
+    isFullWidth: false,
+    isShowingLeftBar: false,
     isDarkMode: false,
     mapStyles: MAP_STYLES_ONLINE,
     needLoginForUrl: '',
-    statusErrors: [] as string[],
+    statusErrors: [] as Warnings[],
+    statusWarnings: [] as Warnings[],
     statusMessage: 'Loading',
     svnProjects: fileSystems,
     visualizationTypes: new Map() as Map<string, VisualizationPlugin>,
     colorScheme: ColorScheme.LightMode,
     locale: 'en',
-    runFolders: {},
+    localFileHandles: [] as any[],
+    runFolders: {} as { [root: string]: any[] },
     runFolderCount: 0,
     resizeEvents: 0,
-    viewState: initialViewState(),
-  } as GlobalState,
+    viewState: initialViewState() as {
+      longitude: number
+      latitude: number
+      bearing: number
+      pitch: number
+      zoom: number
+      center?: number[]
+      jump?: boolean
+      initial?: boolean
+    },
+  },
 
   mutations: {
     updateRunFolders(
-      state: GlobalState,
+      state,
       value: { number: number; folders: { [root: string]: { path: string }[] } }
     ) {
       state.runFolderCount = value.number
       state.runFolders = value.folders
     },
-    requestLogin(state: GlobalState, value: string) {
+    requestLogin(state, value: string) {
       state.needLoginForUrl = value
     },
-    registerPlugin(state: GlobalState, value: VisualizationPlugin) {
+    registerPlugin(state, value: VisualizationPlugin) {
       // console.log('PLUGIN:', value.kebabName)
       state.visualizationTypes.set(value.kebabName, value)
     },
-    setBreadCrumbs(state: GlobalState, value: BreadCrumb[]) {
+    setBreadCrumbs(state, value: BreadCrumb[]) {
       state.breadcrumbs = value
     },
-    setCredentials(state: GlobalState, value: { url: string; username: string; pw: string }) {
+    setCredentials(state, value: { url: string; username: string; pw: string }) {
       const creds = btoa(`${value.username}:${value.pw}`)
       state.credentials[value.url] = creds
       state.authAttempts++
     },
-    setFullScreen(state: GlobalState, value: boolean) {
+    setFullScreen(state, value: boolean) {
       state.isFullScreen = value
     },
-    setMapStyles(state: GlobalState, value: { light: string; dark: string }) {
+    setMapStyles(state, value: { light: string; dark: string }) {
       state.mapStyles = value
     },
     setMapCamera(
-      state: GlobalState,
+      state,
       value: {
         longitude: number
         latitude: number
@@ -122,58 +112,94 @@ export default new Vuex.Store({
       if (!value.jump) state.viewState = value
       else if (state.viewState.initial) state.viewState = value
     },
-    error(state: GlobalState, value: string) {
+    error(state, value: string) {
       if (
-        // don't repeat yourself
         !state.statusErrors.length ||
-        state.statusErrors[state.statusErrors.length - 1] !== value
+        state.statusErrors[state.statusErrors.length - 1].msg !== value
       ) {
-        state.statusErrors.push(value)
+        state.statusErrors.push({ msg: value, desc: '' })
+        state.isShowingLeftBar = true
       }
     },
-    setStatus(state: GlobalState, value: { type: Status; msg: string }) {
+    setStatus(state, value: { type: Status; msg: string; desc?: string }) {
+      if (!value.desc?.length) {
+        value.desc = ''
+      }
+      const warningObj = {
+        msg: value.msg,
+        desc: value.desc,
+      }
       if (value.type === Status.INFO) {
         state.statusMessage = value.msg
+      } else if (value.type === Status.WARNING) {
+        if (
+          // don't repeat yourself
+          !state.statusWarnings.length ||
+          state.statusWarnings[state.statusWarnings.length - 1].msg !== value.msg
+        ) {
+          state.statusWarnings.push(warningObj)
+        }
       } else {
         if (
           // don't repeat yourself
           !state.statusErrors.length ||
-          state.statusErrors[state.statusErrors.length - 1] !== value.msg
+          state.statusErrors[state.statusErrors.length - 1].msg !== value.msg
         ) {
-          state.statusErrors.push(value.msg)
+          state.statusErrors.push(warningObj)
+          state.isShowingLeftBar = true
         }
       }
     },
-    clearError(state: GlobalState, value: number) {
+    clearError(state, value: number) {
       if (state.statusErrors.length >= value) {
         state.statusErrors.splice(value, 1) // remove one element
       }
     },
-    clearAllErrors(state: GlobalState) {
+    clearAllErrors(state) {
       state.statusErrors = []
+      state.statusWarnings = []
     },
-    resize(state: GlobalState) {
+    resize(state) {
       state.resizeEvents += 1
     },
-    rotateColors(state: GlobalState) {
+    rotateColors(state) {
       state.colorScheme =
         state.colorScheme === ColorScheme.DarkMode ? ColorScheme.LightMode : ColorScheme.DarkMode
 
-      state.isDarkMode = state.colorScheme === ColorScheme.DarkMode
-
       console.log('NEW COLORS:', state.colorScheme)
 
-      localStorage.setItem('colorscheme', state.colorScheme)
+      state.isDarkMode = state.colorScheme === ColorScheme.DarkMode
 
+      localStorage.setItem('colorscheme', state.colorScheme)
       document.body.style.backgroundColor =
         state.colorScheme === ColorScheme.LightMode ? '#edebe4' : '#2d3133'
     },
-    setLocale(state: GlobalState, value: string) {
+    setLocale(state, value: string) {
       state.locale = value.toLocaleLowerCase()
       localStorage.setItem('locale', state.locale)
     },
+    addLocalFileSystem(state, value: any) {
+      state.localFileHandles.unshift(value)
+    },
+    setLocalFileSystem(state, value: any) {
+      state.localFileHandles = value
+    },
+    setShowLeftBar(state, value: boolean) {
+      state.isShowingLeftBar = value
+    },
+    toggleShowLeftBar(state) {
+      state.isShowingLeftBar = !state.isShowingLeftBar
+    },
+    setDashboardWidth(state, value: string) {
+      state.dashboardWidth = value
+    },
+    setFullWidth(state, value: boolean) {
+      state.isFullWidth = value
+    },
+    toggleFullWidth(state) {
+      state.isFullWidth = !state.isFullWidth
+    },
   },
-
   actions: {},
   modules: {},
   getters: {

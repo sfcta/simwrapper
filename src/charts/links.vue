@@ -4,6 +4,8 @@ link-volumes.deck-map(
   :subfolder="subfolder"
   :config="config"
   :thumbnail="false"
+  :datamanager="datamanager"
+  @isLoaded="isLoaded"
 )
 
 </template>
@@ -13,6 +15,7 @@ import { Vue, Component, Watch, Prop } from 'vue-property-decorator'
 
 import { FileSystemConfig } from '@/Globals'
 import LinkVolumes from '@/plugins/links-gl/LinkVolumes.vue'
+import DashboardDataManager from '@/js/DashboardDataManager'
 
 @Component({ components: { LinkVolumes } })
 export default class VueComponent extends Vue {
@@ -20,11 +23,16 @@ export default class VueComponent extends Vue {
   @Prop({ required: true }) subfolder!: string
   @Prop({ required: true }) files!: string[]
   @Prop({ required: true }) config!: any
+  @Prop({ required: false }) datamanager!: DashboardDataManager
 
   private mounted() {
     // console.log(this.fileSystemConfig)
     // console.log('subfolder', this.subfolder)
     // console.log('config', this.config)
+    // this.$emit('isLoaded')
+  }
+
+  private isLoaded() {
     this.$emit('isLoaded')
   }
 }
