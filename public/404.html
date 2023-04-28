@@ -3,6 +3,10 @@
 <html lang="en">
   <head>
     <script>
+      // baseURL below MUST reflect base folder of built site;
+      // example: '/simwrapper/' for https://vsp.berlin/simwrapper/
+      const baseURL = '/simwrapper/'
+
       const numRedirects = Number.parseInt(localStorage?.numRedirects || '0') + 1
 
       // console.log({ numRedirects })
