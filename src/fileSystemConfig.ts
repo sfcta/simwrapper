@@ -40,13 +40,19 @@ let fileSystems: FileSystemConfig[] = [
     hidden: true,
   },
   {
+    name: 'SFCTA Public SimWrapper Visualizations',
+    slug: 'sfcta-simwrapper-data',
+    description: 'Data from https://github.com/sfcta/simwrapper-data',
+    baseURL: 'https://sfcta.github.io/sfcta/simwrapper-data/',
+    hidden: false,
+  },
+  {
     name: 'Public Data Folder',
     slug: 'files',
     description: 'Data from /public/data folder',
     baseURL: loc.origin + BASE_URL + 'data',
     hidden: false,
   },
-
   {
     name: 'Browse data',
     slug: 'view',
