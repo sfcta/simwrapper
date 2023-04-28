@@ -44,7 +44,7 @@ let fileSystems: FileSystemConfig[] = [
     slug: 'files',
     description: 'Data from /public/data folder',
     baseURL: loc.origin + BASE_URL + 'data',
-    hidden: true,
+    hidden: false,
   },
 
   {
