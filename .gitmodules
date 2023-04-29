@@ -1,0 +1,3 @@
+[submodule "public/data/simwrapper-data"]
+	path = public/data/simwrapper-data
+	url = https://github.com/sfcta/simwrapper-data
