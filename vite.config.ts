@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite'
-// import vue from '@vitejs/plugin-vue2'
-import { createVuePlugin } from 'vite-plugin-vue2'
-import markdownPlugin from 'vite-plugin-md'
+import vue from '@vitejs/plugin-vue2'
+import Markdown from 'vite-plugin-vue-markdown'
 import pluginRewriteAll from 'vite-plugin-rewrite-all'
 
 export default defineConfig({
@@ -9,9 +8,9 @@ export default defineConfig({
   build: { sourcemap: true },
   plugins: [
     // vue
-    createVuePlugin({ include: [/\.vue$/, /\.md$/] }),
+    vue({ include: [/\.vue$/, /\.md$/] }),
     // markdown
-    markdownPlugin(),
+    Markdown(),
     // why do we need rewriteAll
     pluginRewriteAll(),
   ],
