@@ -52,6 +52,16 @@
             ) {{ `${shipment.$id}: ${shipment.$from}-${shipment.$to}` }}
 
         .tours(v-if="activeTab=='tours'")
+            .dropdown(v-if="this.plans.length > 1" :class="{'is-active': dropdownIsActive}" style="width: 100%")
+              .dropdown-trigger(@click="selectDropdown()")
+                button
+                  span Plan {{ selectedPlanIndex + 1 }}
+                  span.icon.is-small
+                    i.fas.fa-angle-down
+              .dropdown-menu
+                .dropdown-content
+                  a.dropdown-item(v-for="(plan, index) in this.plans" @click="selectPlan(plan)" :class="{'is-active': plan.$selected == 'true'}") Plan {{ index + 1 }}
+
             span {{ $t('tours')}}: {{ tours.length}}
             .leaf.tour(v-for="tour,i in tours" :key="`${i}-${tour.$id}`"
                 @click="handleSelectTour(tour)"
@@ -121,7 +131,7 @@ import globalStore from '@/store'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
 import LegendColors from '@/components/LegendColors'
 import ZoomButtons from '@/components/ZoomButtons.vue'
-import { parseXML, findMatchingGlobInFiles } from '@/js/util'
+import { parseXML, findMatchingGlobInFiles, arrayBufferToBase64 } from '@/js/util'
 
 import RoadNetworkLoader from '@/workers/RoadNetworkLoader.worker.ts?worker'
 
@@ -136,6 +146,7 @@ import {
   LIGHT_MODE,
   DARK_MODE,
   REACT_VIEW_HANDLES,
+  MAP_STYLES_OFFLINE,
   ColorScheme,
 } from '@/Globals'
 
@@ -143,6 +154,7 @@ interface NetworkLinks {
   source: Float32Array
   dest: Float32Array
   linkIds: any[]
+  projection: String
 }
 
 naturalSort.insensitive = true
@@ -238,6 +250,7 @@ const CarrierPlugin = defineComponent({
       services: [] as any[],
       stopActivities: [] as any[],
       tours: [] as any[],
+      plans: [] as any[],
 
       shownShipments: [] as any[],
       shipmentIdsInTour: [] as any[],
@@ -257,6 +270,8 @@ const CarrierPlugin = defineComponent({
 
       selectedCarrier: '',
       selectedTours: [] as any[],
+      selectedPlan: null as any,
+      selectedPlanIndex: null as any,
       selectedShipment: null as any,
 
       thumbnailUrl: "url('assets/thumbnail.jpg') no-repeat;",
@@ -272,11 +287,13 @@ const CarrierPlugin = defineComponent({
       })
         .map((a: any) => a.slice(0, 3))
         .reverse(),
+
+      dropdownIsActive: false,
     }
   },
   computed: {
     fileApi(): HTTPFileSystem {
-      return new HTTPFileSystem(this.fileSystem)
+      return new HTTPFileSystem(this.fileSystem, globalStore)
     },
 
     fileSystem(): FileSystemConfig {
@@ -571,6 +588,8 @@ const CarrierPlugin = defineComponent({
     },
 
     handleSelectCarrier(carrier: any) {
+      this.dropdownIsActive = false
+
       if (!this.links) return
 
       const id = carrier.$id
@@ -579,6 +598,7 @@ const CarrierPlugin = defineComponent({
       this.shipments = []
       this.services = []
       this.tours = []
+      this.plans = []
       this.shownShipments = []
       this.shownDepots = []
       this.selectedShipment = null
@@ -616,10 +636,41 @@ const CarrierPlugin = defineComponent({
       this.selectAllTours()
     },
 
-    processTours(carrier: any) {
-      if (!carrier.plan?.tour?.length) return []
+    getAllPlans(carrier: any) {
+      // Add plan to plans[] if there is no plans-tag and only one plan
+      if (carrier.plan != undefined) {
+        this.plans.push(carrier.plan)
+        this.selectedPlan = carrier.plan
+        return
+      }
 
-      const tours: any[] = carrier.plan.tour.map((tour: any, i: number) => {
+      if (carrier.plans != undefined) {
+        // Add plan to plans[] if a plans-tag has only one child
+        if (carrier.plans.plan.length == undefined) {
+          this.plans.push(carrier.plans.plan)
+          this.selectedPlan = carrier.plans.plan
+          return
+        }
+
+        // Add plans to plans[] if a plans-tag exists and the plans-tag has multiple childs
+        this.plans = carrier.plans.plan
+
+        for (let i = 0; i < carrier.plans.plan.length; i++) {
+          if (carrier.plans.plan[i].selected == 'true') {
+            this.selectedPlan = carrier.plans.plan[i]
+            break
+          }
+          this.selectedPlan = carrier.plans.plan[i]
+        }
+      }
+    },
+
+    processTours(carrier: any) {
+      this.getAllPlans(carrier)
+
+      if (!this.selectPlan || !this.plans.length) return []
+
+      const tours: any[] = this.selectedPlan.tour.map((tour: any, i: number) => {
         // reconstitute the plan. Our XML library builds
         // two arrays: one for acts and one for legs.
         // We need them stitched back together in the correct order.
@@ -755,7 +806,7 @@ const CarrierPlugin = defineComponent({
       let network = this.myState.yamlConfig.replaceAll('carriers', 'network')
       // if the obvious network file doesn't exist, just grab... the first network file:
       if (files.indexOf(network) == -1) {
-        const allNetworks = files.filter(f => f.indexOf('output_network') > -1)
+        const allNetworks = files.filter(f => f.indexOf('network') > -1)
         if (allNetworks.length) network = allNetworks[0]
         else {
           this.myState.statusMessage = 'No road network found.'
@@ -826,7 +877,7 @@ const CarrierPlugin = defineComponent({
             this.myState.subfolder + '/' + this.vizDetails.thumbnail
           )
           const buffer = await readBlob.arraybuffer(blob)
-          const base64 = this.arrayBufferToBase64(buffer)
+          const base64 = arrayBufferToBase64(buffer)
           if (base64)
             this.thumbnailUrl = `center / cover no-repeat url(data:image/png;base64,${base64})`
         } catch (e) {
@@ -868,16 +919,6 @@ const CarrierPlugin = defineComponent({
       this.selectAllTours()
     },
 
-    arrayBufferToBase64(buffer: any) {
-      var binary = ''
-      var bytes = new Uint8Array(buffer)
-      var len = bytes.byteLength
-      for (var i = 0; i < len; i++) {
-        binary += String.fromCharCode(bytes[i])
-      }
-      return window.btoa(binary)
-    },
-
     updateLegendColors() {},
 
     async loadCarriers() {
@@ -903,12 +944,17 @@ const CarrierPlugin = defineComponent({
     },
 
     async loadNetwork() {
-      this.myState.statusMessage = 'Loading network'
+      this.myState.statusMessage = 'Loading network...'
 
       if (this.vizDetails.network.indexOf('.xml.') > -1) {
         // load matsim xml file
         const path = `${this.myState.subfolder}/${this.vizDetails.network}`
         const net = await this.fetchNetwork(path, {})
+
+        // Handle Atlantis: no long/lat coordinates
+        if (net.projection == 'Atlantis') {
+          this.$store.commit('setMapStyles', MAP_STYLES_OFFLINE)
+        }
 
         // build direct lookup of x/y from link-id
         this.myState.statusMessage = 'Building network link table'
@@ -1022,6 +1068,28 @@ const CarrierPlugin = defineComponent({
         return ''
       }
     },
+
+    selectDropdown() {
+      this.dropdownIsActive = !this.dropdownIsActive
+    },
+
+    selectPlan(plan: any) {
+      // Set all plans to unselected
+      for (let i = 0; i < this.plans.length; i++) {
+        this.plans[i].$selected = 'false'
+      }
+
+      // Select new plan
+      plan.$selected = 'true'
+
+      this.selectedPlanIndex = this.plans.indexOf(plan)
+
+      // Unselect all tours
+      this.selectedTours = []
+
+      this.selectDropdown()
+      this.selectedPlan = plan
+    },
   },
   async mounted() {
     globalStore.commit('setFullScreen', !this.thumbnail)
@@ -1046,6 +1114,9 @@ const CarrierPlugin = defineComponent({
     this.setMapCenter()
 
     this.myState.statusMessage = ''
+
+    // Select the first carrier if the carriers are loaded
+    if (this.carriers.length) this.handleSelectCarrier(this.carriers[0])
   },
 
   beforeDestroy() {
@@ -1061,7 +1132,7 @@ globalStore.commit('registerPlugin', {
   kebabName: 'carrier-viewer',
   prettyName: 'Carrier Viewer',
   description: 'For freight etc!',
-  filePatterns: ['**/*output_carriers.xml*', '**/viz-carrier*.y?(a)ml*'],
+  filePatterns: ['**/*carriers.xml*', '**/viz-carrier*.y?(a)ml*'],
   component: CarrierPlugin,
 } as VisualizationPlugin)
 
@@ -1374,9 +1445,15 @@ input {
 }
 
 .xmessage {
+  position: absolute;
+  bottom: 0;
   z-index: 10;
   background-color: var(--bgPanel2);
-  padding: 0.5rem 0.5rem;
+  padding: 0.5rem 1rem;
+}
+
+.dropdown {
+  margin-bottom: 0.5rem;
 }
 
 @media only screen and (max-width: 640px) {

@@ -12,12 +12,12 @@
       .message-area(v-else)
         h3(v-if="state.statusErrors.length") Errors: {{state.statusErrors.length}}
         .single-message(v-for="err,i in state.statusErrors")
-          li(v-html="err.msg" @click="toggleShowDescription(i, true)")
+          p(v-html="cleanError(err.msg)" @click="toggleShowDescription(i, true)")
           .description(v-if="descriptionIndexListError.includes(i)")
             p(v-html="err.desc")
         h3(v-if="state.statusWarnings.length") Warnings: {{state.statusWarnings.length}}
         .single-message(v-for="err,i in state.statusWarnings")
-          li(v-html="err.msg" @click="toggleShowDescription(i, false)")
+          p(v-html="err.msg" @click="toggleShowDescription(i, false)")
           .description(v-if="descriptionIndexListWarning.includes(i)")
             p(v-html="err.desc")
 
@@ -69,6 +69,13 @@ export default defineComponent({
     },
   },
   methods: {
+    cleanError(message: string) {
+      if (!message) return ''
+
+      if (message.startsWith('Error: ')) return message.slice(7)
+      return message
+    },
+
     clearAllButtons() {
       this.$store.commit('clearAllErrors')
 
@@ -191,6 +198,7 @@ a {
   padding: 0 0.25rem;
   text-indent: 0;
   margin-left: 0px;
+  color: white;
 }
 
 .no-error p {
@@ -206,6 +214,13 @@ a {
 
 ::-webkit-scrollbar-corner {
   background: rgba(0, 0, 0, 0);
+}
+
+p {
+  padding-bottom: 0.5rem;
+  line-height: 1.1rem;
+  list-style-type: square;
+  word-wrap: break-word;
 }
 
 @media only screen and (max-width: 640px) {

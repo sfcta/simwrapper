@@ -70,7 +70,7 @@ import * as turf from '@turf/turf'
 import colormap from 'colormap'
 import crossfilter from 'crossfilter2'
 import maplibregl, { GeoJSONSource, LngLatBoundsLike, LngLatLike, Popup } from 'maplibre-gl'
-import Papaparse from 'papaparse'
+import Papa from '@simwrapper/papaparse'
 import yaml from 'yaml'
 
 import globalStore from '@/store'
@@ -102,6 +102,7 @@ const MyComponent = defineComponent({
   name: 'TransitViewer',
   i18n,
   components: { CollapsiblePanel, LeftDataPanel, LegendBox, DrawingTool, ZoomButtons },
+
   props: {
     root: { type: String, required: true },
     subfolder: { type: String, required: true },
@@ -109,7 +110,8 @@ const MyComponent = defineComponent({
     config: { type: Object as any },
     thumbnail: Boolean,
   },
-  data() {
+
+  data: () => {
     const metrics = [{ field: 'departures', name_en: 'Departures', name_de: 'Abfahrten' }]
 
     return {
@@ -153,9 +155,9 @@ const MyComponent = defineComponent({
       _routeData: {} as { [index: string]: RouteDetails },
       _stopFacilities: {} as { [index: string]: NetworkNode },
       _transitLines: {} as { [index: string]: TransitLine },
-      _roadFetcher: null as any,
-      _transitFetcher: null as any,
-      _transitHelper: null as any,
+      _roadFetcher: {} as any,
+      _transitFetcher: {} as any,
+      _transitHelper: {} as any,
       _transitLinks: null as any,
       _geoTransitLinks: null as any,
 
@@ -167,9 +169,10 @@ const MyComponent = defineComponent({
       hoverWait: false,
     }
   },
+
   computed: {
     fileApi(): HTTPFileSystem {
-      return new HTTPFileSystem(this.fileSystem)
+      return new HTTPFileSystem(this.fileSystem, globalStore)
     },
 
     fileSystem(): FileSystemConfig {
@@ -241,13 +244,12 @@ const MyComponent = defineComponent({
       // are we in a dashboard?
       if (this.config) {
         this.vizDetails = Object.assign({}, this.config)
-        return
+        return true
       }
 
       // if a YAML file was passed in, just use it
       if (this.myState.yamlConfig?.endsWith('yaml') || this.myState.yamlConfig?.endsWith('yml')) {
-        this.loadYamlConfig()
-        return
+        return this.loadYamlConfig()
       }
 
       // Build the config based on folder contents
@@ -266,13 +268,15 @@ const MyComponent = defineComponent({
       }
 
       this.$emit('title', title)
+      return true
     },
 
     async prepareView() {
       const { files } = await this.fileApi.getDirectory(this.myState.subfolder)
 
       // Road network: first try the most obvious network filename:
-      let network = this.myState.yamlConfig.replaceAll('transitSchedule', 'network')
+      let network =
+        this.vizDetails.network ?? this.myState.yamlConfig.replaceAll('transitSchedule', 'network')
 
       // if the obvious network file doesn't exist, just grab... the first network file:
       if (files.indexOf(network) == -1) {
@@ -290,25 +294,24 @@ const MyComponent = defineComponent({
         demandFiles = files.filter(f => f.endsWith('pt_stop2stop_departures.csv.gz'))
       }
 
-      // Coordinates:
-      const projection = await this.guessProjection(files)
-      console.log(projection)
-
       // Save everything
       this.vizDetails.network = network
-      this.vizDetails.projection = projection
       if (demandFiles.length) this.vizDetails.demand = demandFiles[0]
-
-      this.projection = this.vizDetails.projection
     },
 
-    async guessProjection(files: string[]): Promise<string> {
-      // 0. If it's in config, use it
+    async guessProjection(networks: any): Promise<string> {
+      // 00. If it's in config, use it
+      if (this.vizDetails.projection) return this.vizDetails.projection
       if (this.config?.projection) return this.config.projection
+
+      // 0. If it's in the network, use it
+      if (networks?.roadXML?.network?.attributes?.attribute?.name === 'coordinateReferenceSystem') {
+        return networks?.roadXML?.network?.attributes?.attribute['#text']
+      }
 
       // 1. if we have it in storage already, use it
       const storagePath = `${this.root}/${this.subfolder}`
-      let savedConfig = localStorage.getItem(storagePath) as any
+      let savedConfig = undefined // localStorage.getItem(storagePath) as any
 
       const goodEPSG = /EPSG:.\d/
 
@@ -329,6 +332,7 @@ const MyComponent = defineComponent({
       }
 
       // 2. try to get it from config
+      const { files } = await this.fileApi.getDirectory(this.myState.subfolder)
       const outputConfigs = files.filter(
         f => f.indexOf('.output_config.xml') > -1 || f.indexOf('.output_config_reduced.xml') > -1
       )
@@ -349,9 +353,9 @@ const MyComponent = defineComponent({
             const crsValue = crs.$value
 
             // save it
-            savedConfig = savedConfig || {}
-            savedConfig.networkProjection = crsValue
-            localStorage.setItem(storagePath, JSON.stringify(savedConfig))
+            // savedConfig = savedConfig || {}
+            // savedConfig.networkProjection = crsValue
+            // localStorage.setItem(storagePath, JSON.stringify(savedConfig))
             return crsValue
           } catch (e) {
             console.warn('Failed parsing', xmlConfigFileName)
@@ -365,7 +369,7 @@ const MyComponent = defineComponent({
       // if user cancelled, give up
       if (!entry) return ''
       // if user gave bad answer, try again
-      if (isNaN(parseInt(entry, 10)) && !goodEPSG.test(entry)) return this.guessProjection(files)
+      if (isNaN(parseInt(entry, 10)) && !goodEPSG.test(entry)) return this.guessProjection(networks)
 
       // hopefully user gave a good EPSG number
       if (!entry.startsWith('EPSG:')) entry = 'EPSG:' + entry
@@ -376,14 +380,12 @@ const MyComponent = defineComponent({
     },
 
     async loadYamlConfig() {
-      // first get config
-      try {
-        // might be a project config:
-        const filename =
-          this.myState.yamlConfig.indexOf('/') > -1
-            ? this.myState.yamlConfig
-            : this.myState.subfolder + '/' + this.myState.yamlConfig
+      const filename =
+        this.myState.yamlConfig.indexOf('/') > -1
+          ? this.myState.yamlConfig
+          : this.myState.subfolder + '/' + this.myState.yamlConfig
 
+      try {
         const text = await this.fileApi.getFileText(filename)
         this.vizDetails = yaml.parse(text)
       } catch (e) {
@@ -391,13 +393,19 @@ const MyComponent = defineComponent({
         const err = e as any
         if (this.fileSystem && this.fileSystem.needPassword && err.status === 401) {
           this.$store.commit('requestLogin', this.fileSystem.slug)
+        } else {
+          const msg = 'Could not load ' + filename
+          this.$store.commit('error', msg)
+          this.loadingText = msg
         }
+        return false
       }
 
       const t = this.vizDetails.title ? this.vizDetails.title : 'Transit Ridership'
       this.$emit('title', t)
 
       this.projection = this.vizDetails.projection
+      return true
     },
 
     isMobile() {
@@ -423,15 +431,18 @@ const MyComponent = defineComponent({
         const extent = localStorage.getItem(this.$route.fullPath + '-bounds')
 
         if (extent) {
-          const lnglat = JSON.parse(extent)
+          try {
+            const lnglat = JSON.parse(extent)
+            const mFac = this.isMobile() ? 0 : 1
+            const padding = { top: 50 * mFac, bottom: 50 * mFac, right: 50 * mFac, left: 50 * mFac }
 
-          const mFac = this.isMobile() ? 0 : 1
-          const padding = { top: 50 * mFac, bottom: 50 * mFac, right: 50 * mFac, left: 50 * mFac }
-
-          this.mymap.fitBounds(lnglat, {
-            animate: false,
-            padding,
-          })
+            this.mymap.fitBounds(lnglat, {
+              animate: false,
+              padding,
+            })
+          } catch (e) {
+            // ignore this, it's ok
+          }
         }
         // Start doing stuff AFTER the MapBox library has fully initialized
         this.mymap.on('load', this.mapIsReady)
@@ -440,7 +451,8 @@ const MyComponent = defineComponent({
 
         this.mymap.keyboard.disable() // so arrow keys don't pan
       } catch (e) {
-        console.error({ e })
+        console.error('' + e)
+
         // no worries
       }
     },
@@ -504,11 +516,14 @@ const MyComponent = defineComponent({
 
     async mapIsReady() {
       const networks = await this.loadNetworks()
-      // console.log({ networks })
+      const projection = await this.guessProjection(networks)
+      this.vizDetails.projection = projection
+      this.projection = this.vizDetails.projection
+      console.log(projection)
+
       if (networks) this.processInputs(networks)
 
-      // TODO remove for now until we research whether
-      // this causes a memory leak:
+      // TODO remove for now until we research whether this causes a memory leak:
       // this.setupKeyListeners()
     },
 
@@ -530,26 +545,27 @@ const MyComponent = defineComponent({
     },
 
     fetchXML(props: { worker: any; slug: string; filePath: string; options?: any }) {
-      if (props.worker) props.worker.terminate()
+      let xmlWorker = props.worker
 
-      let xmlWorker = props.worker || ({} as any)
-      {
-        xmlWorker = new NewXmlFetcher()
-        xmlWorker.onmessage = (message: MessageEvent) => {
-          // message.data will have .id and either .error or .xml
-          const { resolve, reject } = this.resolvers[message.data.id]
+      xmlWorker.onmessage = (message: MessageEvent) => {
+        // message.data will have .id and either .error or .xml
+        const { resolve, reject } = this.resolvers[message.data.id]
 
-          xmlWorker.terminate()
+        xmlWorker.terminate()
 
-          if (message.data.error) reject(message.data.error)
-          resolve(message.data.xml)
-        }
+        if (message.data.error) reject(message.data.error)
+        resolve(message.data.xml)
       }
 
       // save the promise by id so we can look it up when we get messages
       const id = this.resolverId++
 
-      xmlWorker.postMessage(Object.assign({ id, fileSystem: this.fileSystem }, props))
+      xmlWorker.postMessage({
+        id,
+        fileSystem: this.fileSystem,
+        filePath: props.filePath,
+        options: props.options,
+      })
 
       const promise = new Promise((resolve, reject) => {
         this.resolvers[id] = { resolve, reject }
@@ -562,8 +578,6 @@ const MyComponent = defineComponent({
         if (!this.fileSystem || !this.vizDetails.network || !this.vizDetails.transitSchedule) return
 
         this.loadingText = 'Loading networks...'
-
-        // this._xmlWorkers.push(worker) // save it so we can terminate if we have to
 
         const roads = this.fetchXML({
           worker: this._roadFetcher,
@@ -607,13 +621,13 @@ const MyComponent = defineComponent({
           const csvData = new TextDecoder('utf-8').decode(event.data)
           worker.terminate()
 
-          Papaparse.parse(csvData, {
+          Papa.parse(csvData, {
             // preview: 10000,
             header: true,
             skipEmptyLines: true,
             dynamicTyping: true,
             worker: true,
-            complete: results => {
+            complete: (results: any) => {
               resolve(this.processDemand(results))
             },
           })
@@ -627,7 +641,7 @@ const MyComponent = defineComponent({
       return promise
     },
 
-    processDemand(results: Papaparse.ParseResult<unknown>) {
+    processDemand(results: any) {
       // todo: make sure meta contains fields we need!
       this.loadingText = 'Processing demand data...'
 
@@ -700,6 +714,13 @@ const MyComponent = defineComponent({
         this.loadingText = buffer.data.status
         return
       }
+
+      if (buffer.data.error) {
+        console.error(buffer.data.error)
+        this.$store.commit('error', buffer.data.error)
+        return
+      }
+
       const { network, routeData, stopFacilities, transitLines, mapExtent } = buffer.data
       this._network = network
       this._routeData = routeData
@@ -811,6 +832,8 @@ const MyComponent = defineComponent({
       for (const linkID in this._departures) {
         if (this._departures.hasOwnProperty(linkID)) {
           const link = this._network.links[linkID]
+          if (!link) continue
+
           const coordinates = [
             [this._network.nodes[link.from].x, this._network.nodes[link.from].y],
             [this._network.nodes[link.to].x, this._network.nodes[link.to].y],
@@ -1072,12 +1095,17 @@ const MyComponent = defineComponent({
 
     this.clearData()
 
+    this._roadFetcher = new NewXmlFetcher()
+    this._transitFetcher = new NewXmlFetcher()
+    this._transitHelper = new TransitSupplyWorker()
+
     // populate props after we attach, not before!
     this.myState.subfolder = this.subfolder
     this.myState.yamlConfig = this.yamlConfig ?? ''
     this.myState.thumbnail = this.thumbnail
 
-    await this.getVizDetails()
+    const status = await this.getVizDetails()
+    if (!status) return
 
     if (this.thumbnail) return
 
@@ -1091,8 +1119,8 @@ const MyComponent = defineComponent({
     this.clearData()
 
     if (this.xmlWorker) this.xmlWorker.terminate()
-    if (this._roadFetcher) this._roadFetcher.destroy()
-    if (this._transitFetcher) this._transitFetcher.destroy()
+    if (this._roadFetcher) this._roadFetcher.terminate()
+    if (this._transitFetcher) this._transitFetcher.terminate()
     if (this._transitHelper) this._transitHelper.terminate()
 
     this.$store.commit('setFullScreen', false)
@@ -1104,8 +1132,8 @@ globalStore.commit('registerPlugin', {
   kebabName: 'transit',
   prettyName: 'Transit Demand',
   description: 'Transit passengers and ridership',
-  // filePatterns: ['viz-pt-demand*.y?(a)ml', '*output_transitSchedule.xml?(.gz)'],
-  filePatterns: ['*transitSchedule.xml?(.gz)'],
+  filePatterns: ['viz-pt*.y?(a)ml', '*transitschedule.xml?(.gz)'],
+  // filePatterns: ['*transitschedule.xml?(.gz)'],
   component: MyComponent,
 } as VisualizationPlugin)
 

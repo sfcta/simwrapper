@@ -200,7 +200,6 @@ export default defineComponent({
     },
 
     async loadData() {
-      if (!this.files.length) return {}
       if (!this.datamanager) return {}
 
       try {
@@ -296,11 +295,7 @@ export default defineComponent({
 
       // old legendname field
       if (this.config.legendName) this.config.legendTitles = this.config.legendName
-      if (this.config.legendTitles !== undefined) {
-        if (this.config.legendTitles.length === columns.length) {
-          useOwnNames = true
-        }
-      }
+      if (this.config.legendTitles?.length) useOwnNames = true
 
       if (this.config.stacked) {
         this.layout.barmode = 'stack'
@@ -321,7 +316,7 @@ export default defineComponent({
 
       for (let i = 0; i < columns.length; i++) {
         const col = columns[i]
-        const legendName = useOwnNames ? this.config.legendTitles[i] : col
+        const legendName = useOwnNames ? this.config.legendTitles[i] ?? col : col
 
         let values = allRows[col].values
         if (this.config.skipFirstRow) values = values.slice(1)

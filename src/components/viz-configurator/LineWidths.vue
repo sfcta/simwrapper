@@ -1,26 +1,49 @@
 <template lang="pug">
 .width-panel
+
+  //- DATA COLUMN
   .widgets
     .widget
+        p.tight Display
         b-select.selector(expanded v-model="dataColumn")
 
           option(label="None" value="@0")
           option(label="1px" value="@1")
           option(label="2px" value="@2")
+          option(label="3px" value="@3")
+          option(label="5px" value="@5")
+          option(label="8px" value="@8")
 
-          optgroup(v-for="dataset in datasetChoices()"
+          optgroup(v-for="dataset in datasetChoices"
                   :key="dataset" :label="dataset")
             option(v-for="column in numericColumnsInDataset(dataset)"
+                  :key="`${dataset}/${column}`"
                   :value="`${dataset}/${column}`"
                   :label="column")
 
-  .widgets
+  //- JOIN COLUMN ------------
+  .widgets(v-if="datasetChoices.length > 1 && dataColumn && dataColumn.length > 2")
+    .widget
+        p.tight Join by
+        b-select.selector(expanded v-model="join")
+          option(label="None" value="")
+          option(label="Row count" value="@count")
+
+          optgroup(label="Join by...")
+            option(v-for="col in columnsInDataset(dataColumn?.slice(0, dataColumn.indexOf('/')) || [])"
+                   :key="col"
+                   :value="col"
+                   :label="col"
+            )
+
+  //- SCALING ----------------
+  .widgets(v-if="dataColumn && dataColumn.length > 2")
     .widget
       p Scaling
       b-field
         b-input(:disabled="!dataColumn" v-model="scaleFactor" placeholder="1.0")
 
-  //- DIFF MODE
+  //- DIFF MODE --------------
   .more(:title="diffChoices.length<2 ? 'Add two datasets to enable comparisons' : ''")
     .widgets
       .widget(style="flex: 3")
@@ -67,6 +90,7 @@ export type LineWidthDefinition = {
   diff?: string
   diffDatasets?: string[]
   relative?: boolean
+  join?: string
 }
 
 export default defineComponent({
@@ -81,6 +105,7 @@ export default defineComponent({
     return {
       dataColumn: '',
       scaleFactor: '1',
+      join: '',
       selectedTransform: transforms[0],
       datasetLabels: [] as string[],
       diffDatasets: [] as string[],
@@ -118,11 +143,18 @@ export default defineComponent({
     scaleFactor() {
       this.debounceHandleScaleChanged()
     },
+    join() {
+      this.emitSpecification()
+    },
+  },
+  computed: {
+    datasetChoices() {
+      return this.datasetLabels.filter(label => label !== 'csvBase').reverse()
+    },
   },
   methods: {
     vizConfigChanged() {
       const config = this.vizConfiguration.display?.lineWidth
-
       this.setupDiffMode(config)
 
       if (config?.columnName) {
@@ -131,7 +163,11 @@ export default defineComponent({
           : `${config.dataset}/${config.columnName}`
 
         this.datasetLabels = [...this.datasetLabels]
-        this.scaleFactor = config.scaleFactor
+        this.scaleFactor = config.scaleFactor ?? '1'
+        this.join = config.join
+      } else if (/^@\d$/.test(config?.dataset)) {
+        // simple numeric width:
+        this.dataColumn = config.dataset
       }
     },
     setupDiffMode(config: LineWidthDefinition) {
@@ -220,13 +256,14 @@ export default defineComponent({
       const lineWidth: LineWidthDefinition = {
         dataset,
         columnName,
+        join: this.join,
         scaleFactor: parseFloat(this.scaleFactor),
       } as any
 
       if (this.diffDatasets.length) lineWidth.diffDatasets = this.diffDatasets
       if (this.diffRelative) lineWidth.relative = true
 
-      setTimeout(() => this.$emit('update', { lineWidth }), 25)
+      setTimeout(() => this.$emit('update', { lineWidth }), 50)
     },
 
     clickedSingle() {
@@ -244,11 +281,17 @@ export default defineComponent({
 
       // the link viewer is on main thread so lets make
       // sure user gets some visual feedback
-      setTimeout(() => this.$emit('update', { lineWidth }), 25)
+      setTimeout(() => this.$emit('update', { lineWidth }), 20)
     },
 
-    datasetChoices(): string[] {
-      return this.datasetLabels.filter(label => label !== 'csvBase').reverse()
+    columnsInDataset(datasetId: string): string[] {
+      const dataset = this.datasets[datasetId]
+      if (!dataset) return []
+      const allColumns = Object.keys(dataset).filter(
+        colName => dataset[colName].type !== DataType.LOOKUP
+      )
+
+      return allColumns
     },
 
     numericColumnsInDataset(datasetId: string): string[] {

@@ -16,6 +16,7 @@
         :newColors="colorArray"
         :newWidths="widthArray"
         :scaleWidth="scaleWidth"
+        :projection="vizDetails.projection"
         :mapIsIndependent="vizDetails.mapIsIndependent"
     )
 
@@ -30,6 +31,7 @@
       :subfolder="myState.subfolder"
       :yamlConfig="yamlConfig"
       :legendStore="legendStore"
+      :filterDefinitions="currentUIFilterDefinitions"
       @update="changeConfiguration")
 
     //- .top-panel(v-if="vizDetails.title")
@@ -98,12 +100,11 @@ import { ToggleButton } from 'vue-js-toggle-button'
 import { rgb } from 'd3-color'
 import { scaleThreshold, scaleOrdinal } from 'd3-scale'
 import { shallowEqualObjects } from 'shallow-equal'
-
 import readBlob from 'read-blob'
 import YAML from 'yaml'
 
 import globalStore from '@/store'
-import { DataTableColumn, DataTable, DataType, LookupDataset } from '@/Globals'
+import { MAP_STYLES_OFFLINE, DataTableColumn, DataTable, DataType, LookupDataset } from '@/Globals'
 // import FilterPanel from './BadFilterPanel.vue'
 import SelectorPanel from './SelectorPanel.vue'
 import LinkGlLayer from './LinkLayer'
@@ -112,6 +113,8 @@ import DrawingTool from '@/components/DrawingTool/DrawingTool.vue'
 import VizConfigurator from '@/components/viz-configurator/VizConfigurator.vue'
 import ZoomButtons from '@/components/ZoomButtons.vue'
 import LegendStore from '@/js/LegendStore'
+import Coords from '@/js/Coords'
+import { arrayBufferToBase64 } from '@/js/util'
 
 import {
   ColorScheme,
@@ -212,6 +215,7 @@ const MyComponent = defineComponent({
         },
       },
 
+      currentUIFilterDefinitions: {} as any,
       datasets: {} as { [id: string]: DataTable },
       isButtonActiveColumn: false,
       linkLayerId: `linklayer-${Math.floor(1e12 * Math.random())}` as any,
@@ -223,6 +227,7 @@ const MyComponent = defineComponent({
         source: new Float32Array(),
         dest: new Float32Array(),
         linkIds: [] as any[],
+        projection: '',
       },
       fixedColors: ['#4e79a7'],
       myState: {
@@ -272,7 +277,6 @@ const MyComponent = defineComponent({
       myDataManager: this.datamanager || new DashboardDataManager(this.root, this.subfolder),
 
       resizer: undefined as ResizeObserver | undefined,
-      networkWorker: undefined as Worker | undefined,
       dataLoaderWorkers: [] as Worker[],
       csvRowLookupFromLinkRow: {} as { [datasetId: string]: number[] },
 
@@ -282,7 +286,7 @@ const MyComponent = defineComponent({
   },
   computed: {
     fileApi(): HTTPFileSystem {
-      return new HTTPFileSystem(this.fileSystem)
+      return new HTTPFileSystem(this.fileSystem, globalStore)
     },
 
     fileSystem(): FileSystemConfig {
@@ -451,23 +455,13 @@ const MyComponent = defineComponent({
             this.myState.subfolder + '/' + this.vizDetails.thumbnail
           )
           const buffer = await readBlob.arraybuffer(blob)
-          const base64 = this.arrayBufferToBase64(buffer)
+          const base64 = arrayBufferToBase64(buffer)
           if (base64)
             this.thumbnailUrl = `center / cover no-repeat url(data:image/png;base64,${base64})`
         } catch (e) {
           console.error(e)
         }
       }
-    },
-
-    arrayBufferToBase64(buffer: any) {
-      var binary = ''
-      var bytes = new Uint8Array(buffer)
-      var len = bytes.byteLength
-      for (var i = 0; i < len; i++) {
-        binary += String.fromCharCode(bytes[i])
-      }
-      return window.btoa(binary)
     },
 
     toggleShowDiffs() {
@@ -626,39 +620,43 @@ const MyComponent = defineComponent({
       this.generateColorArray()
     },
 
-    async setMapCenter() {
-      const data = this.geojsonData
-      if (this.vizDetails.center) {
-        if (typeof this.vizDetails.center == 'string') {
-          this.vizDetails.center = this.vizDetails.center.split(',').map(Number)
-        }
-
-        if (!this.vizDetails.zoom) {
-          this.vizDetails.zoom = 9
-        }
-
-        this.$store.commit('setMapCamera', {
-          longitude: this.vizDetails.center[0],
-          latitude: this.vizDetails.center[1],
-          bearing: 0,
-          pitch: 0,
-          zoom: this.vizDetails.zoom,
-          jump: false,
-        })
-
-        const view = {
-          longitude: this.vizDetails.center[0],
-          latitude: this.vizDetails.center[1],
-          bearing: 0,
-          pitch: 0,
-          zoom: this.vizDetails.zoom || 10, // use 10 default if we don't have a zoom
-          jump: false, // move the map no matter what
-        }
-
-        // bounce our map
-        if (REACT_VIEW_HANDLES[this.linkLayerId]) REACT_VIEW_HANDLES[this.linkLayerId](view)
-        return
+    setMapCenterFromVizDetails() {
+      if (typeof this.vizDetails.center == 'string') {
+        this.vizDetails.center = this.vizDetails.center.split(',').map(Number)
       }
+
+      if (!this.vizDetails.zoom) {
+        this.vizDetails.zoom = 9
+      }
+
+      this.$store.commit('setMapCamera', {
+        longitude: this.vizDetails.center[0],
+        latitude: this.vizDetails.center[1],
+        bearing: 0,
+        pitch: 0,
+        zoom: this.vizDetails.zoom,
+        jump: false,
+      })
+
+      const view = {
+        longitude: this.vizDetails.center[0],
+        latitude: this.vizDetails.center[1],
+        bearing: 0,
+        pitch: 0,
+        zoom: this.vizDetails.zoom || 10, // use 10 default if we don't have a zoom
+        jump: false, // move the map no matter what
+      }
+
+      // bounce our map
+      if (REACT_VIEW_HANDLES[this.linkLayerId]) {
+        REACT_VIEW_HANDLES[this.linkLayerId](view)
+      }
+    },
+
+    async setMapCenter() {
+      if (this.vizDetails.center) return this.setMapCenterFromVizDetails()
+
+      const data = this.geojsonData
 
       if (!data.source.length) return
 
@@ -666,30 +664,37 @@ const MyComponent = defineComponent({
       let longitude = 0
       let latitude = 0
 
-      const numLinks = data.source.length / 2
+      console.log({ projection: this.geojsonData.projection })
 
-      const gap = 4096
-      for (let i = 0; i < numLinks; i += gap) {
-        longitude += data.source[i * 2]
-        latitude += data.source[i * 2 + 1]
-        samples++
+      // figure out the center
+      if (this.geojsonData.projection === 'Atlantis') {
+        const webMercator =
+          '+proj=merc +a=6378137 +b=6378137 +lat_ts=0.0 +lon_0=0.0 +x_0=0.0 +y_0=0 +k=1.0 +units=m +nadgrids=@null +wktext  +no_defs'
+        const firstPoint = Coords.toLngLat(webMercator, [data.source[0], data.source[1]])
+        longitude = firstPoint[0]
+        latitude = firstPoint[1]
+      } else {
+        const numLinks = data.source.length / 2
+        const gap = numLinks < 4096 ? 2 : 1024
+        for (let i = 0; i < numLinks; i += gap) {
+          longitude += data.source[i * 2]
+          latitude += data.source[i * 2 + 1]
+          samples++
+        }
+
+        longitude = longitude / samples
+        latitude = latitude / samples
       }
-
-      longitude = longitude / samples
-      latitude = latitude / samples
-
       console.log('center', longitude, latitude)
 
-      if (longitude && latitude) {
-        this.$store.commit('setMapCamera', {
-          longitude,
-          latitude,
-          bearing: 0,
-          pitch: 0,
-          zoom: 9,
-          jump: false,
-        })
-      }
+      this.$store.commit('setMapCamera', {
+        longitude,
+        latitude,
+        bearing: 0,
+        pitch: 0,
+        zoom: 8,
+        jump: false,
+      })
     },
 
     setupLogoMover() {
@@ -707,6 +712,10 @@ const MyComponent = defineComponent({
       }
     },
 
+    async updateStatus(message: string) {
+      this.myState.statusMessage = message
+    },
+
     async loadNetwork(): Promise<any> {
       if (!this.myDataManager) throw Error('links: no datamanager')
 
@@ -717,11 +726,18 @@ const MyComponent = defineComponent({
         const network = await this.myDataManager.getRoadNetwork(
           filename,
           this.myState.subfolder,
-          this.vizDetails
+          this.vizDetails,
+          this.updateStatus
         )
 
         this.numLinks = network.linkIds.length
-        this.geojsonData = network
+        this.geojsonData = network as any
+
+        // Handle Atlantis: no long/lat coordinates
+        if (network.projection == 'Atlantis') {
+          this.vizDetails.projection = 'Atlantis'
+          this.$store.commit('setMapStyles', MAP_STYLES_OFFLINE)
+        }
 
         this.setMapCenter() // this could be off main thread
 
@@ -1045,8 +1061,9 @@ const MyComponent = defineComponent({
     // MUST delete the React view handle to prevent gigantic memory leak!
     delete REACT_VIEW_HANDLES[this.linkLayerId]
 
-    if (this.networkWorker) this.networkWorker.terminate()
-    for (const worker of this.dataLoaderWorkers) worker.terminate()
+    try {
+      for (const worker of this.dataLoaderWorkers) worker.terminate()
+    } catch (e) {}
 
     this.$store.commit('setFullScreen', false)
   },
@@ -1058,7 +1075,7 @@ globalStore.commit('registerPlugin', {
   prettyName: 'Network Links',
   description: 'Network link attributes',
   filePatterns: [
-    '**/*output_network.xml?(.gz)',
+    '**/*network.xml?(.gz)',
     '**/*network.geo?(.)json?(.gz)',
     '**/viz-gl-link*.y?(a)ml',
     '**/viz-link*.y?(a)ml',

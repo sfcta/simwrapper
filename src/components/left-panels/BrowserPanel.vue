@@ -332,7 +332,8 @@ export default defineComponent({
       this.highlightedViz = -2
 
       if (!this.myState.svnProject) return
-      this.myState.svnRoot = new HTTPFileSystem(this.myState.svnProject)
+
+      this.myState.svnRoot = new HTTPFileSystem(this.myState.svnProject, globalStore)
 
       this.generateBreadcrumbs()
 
@@ -814,7 +815,7 @@ export default defineComponent({
         if (!showDashboards) allConfigs.dashboards = {}
         return allConfigs
       } catch (e) {
-        console.error('' + e)
+        // console.error('' + e)
         return { dashboards: {}, configs: {}, vizes: {}, topsheets: {} }
         // throw Error('' + e)
       }

@@ -305,8 +305,8 @@ export default defineComponent({
     buildShowEverythingView() {
       // loop on each viz type
       for (const viz of this.globalState.visualizationTypes.values()) {
-        // filter based on file matching
-        const matches = micromatch(this.myState.files, viz.filePatterns)
+        // match based on file patterns registered for each viz
+        const matches = micromatch(this.myState.files, viz.filePatterns, { nocase: true })
         for (const file of matches) {
           // add thumbnail for each matching file
           this.myState.vizes.push({ component: viz.kebabName, config: file, title: '..' })

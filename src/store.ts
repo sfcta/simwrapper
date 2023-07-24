@@ -51,6 +51,7 @@ export default new Vuex.Store({
     isShowingLeftBar: true,
     isDarkMode: true,
     isInitialViewSet: false,
+    fileHandleAccessRequests: [] as any[],
     mapStyles: MAP_STYLES_ONLINE,
     needLoginForUrl: '',
     statusErrors: [] as Warnings[],
@@ -104,7 +105,10 @@ export default new Vuex.Store({
     setFullScreen(state, value: boolean) {
       state.isFullScreen = value
     },
-    setMapStyles(state, value: { light: string; dark: string }) {
+    setMapStyles(
+      state,
+      value: { light: string; dark: string; transparentLight: string; transparentDark: string }
+    ) {
       state.mapStyles = value
     },
     setMapCamera(
@@ -235,6 +239,12 @@ export default new Vuex.Store({
     },
     setShowLeftBar(state, value: boolean) {
       state.isShowingLeftBar = value
+    },
+    setFileHandleForPermissionRequest(state, handle: any) {
+      state.fileHandleAccessRequests.push(handle)
+    },
+    clearFileHandlePermissionRequests(state) {
+      state.fileHandleAccessRequests = []
     },
     toggleShowLeftBar(state) {
       state.isShowingLeftBar = !state.isShowingLeftBar

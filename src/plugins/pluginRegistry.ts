@@ -7,14 +7,16 @@ import Summary from '@/plugins/calculation-table/CalculationTable.vue'
 import Network from '@/plugins/links-gl/NetworkLinks.vue'
 import Transit from '@/plugins/transit-demand/TransitDemand.vue'
 import AggregateOd from '@/plugins/aggregate-od/AggregateOd.vue'
+import Plotly from '@/plugins/plotly/PlotlyDiagram.vue'
 import Sankey from '@/plugins/sankey/SankeyDiagram.vue'
 import VegaLite from '@/plugins/vega-lite/VegaLite.vue'
 import VidPlayer from '@/plugins/video-player/VideoPlayer.vue'
 import ImageView from '@/plugins/image/ImageView.vue'
 import AreaMap from '@/plugins/shape-file/ShapeFile.vue'
-import Hexagons from '@/plugins/xy-hexagons/XyHexagons.vue'
 import XYT from '@/plugins/xy-time/XyTime.vue'
+import Hexagons from '@/plugins/xy-hexagons/XyHexagons.vue'
 import Flowmap from '@/plugins/flowmap/Flowmap.vue'
+import XmlViewer from '@/plugins/xml-viewer/XmlViewer.vue'
 
 // // EVERY plugin must also be exported here:
 const plugins = {
@@ -27,6 +29,7 @@ const plugins = {
   CarrierViewer,
   Hexagons,
   Sankey,
+  Plotly,
   VegaLite,
   VehicleView,
   XYT,
@@ -34,6 +37,7 @@ const plugins = {
   ImageView,
   XmasKelheim,
   Flowmap,
+  XmlViewer,
 }
 
 export default plugins

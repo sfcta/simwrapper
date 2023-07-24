@@ -2,11 +2,11 @@
 
 import nerdamer, { ExpressionParam } from 'nerdamer'
 import pako from 'pako'
-import Papaparse from 'papaparse'
 import YAML from 'yaml'
 
 import { FileSystemConfig, YamlConfigs } from '@/Globals'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
+import Papa from '@simwrapper/papaparse'
 import { findMatchingGlobInFiles, parseXML } from '@/js/util'
 
 type TableRow = {
@@ -126,20 +126,25 @@ async function runTopSheet(props: {
 }) {
   // console.log('TopSheet thread worker starting')
 
-  _fileSystem = new HTTPFileSystem(props.fileSystemConfig)
-  _originalFolder = props.subfolder
-  _subfolder = props.subfolder
-  _files = props.files
-  _yamlFile = props.yaml
-  _locale = props.locale
-  _allConfigYamls = props.allConfigFiles
+  try {
+    _fileSystem = new HTTPFileSystem(props.fileSystemConfig)
+    _originalFolder = props.subfolder
+    _subfolder = props.subfolder
+    _files = props.files
+    _yamlFile = props.yaml
+    _locale = props.locale
+    _allConfigYamls = props.allConfigFiles
 
-  // read the table definitions from yaml
-  _yaml = await getYaml()
+    // read the table definitions from yaml
+    _yaml = await getYaml()
 
-  // set the title
-  const title = getTitle(_locale)
-  postMessage({ response: 'title', title })
+    // set the title
+    const title = getTitle(_locale)
+    postMessage({ response: 'title', title })
+  } catch (e) {
+    postMessage({ response: 'error', message: 'Bad configuration' })
+    return [{ title: 'Error in configuration', value: '', style: { backgroundColor: 'yellow' } }]
+  }
 
   // load all files
   await loadFiles()
@@ -588,7 +593,7 @@ async function parseVariousFileTypes(fileKey: string, filename: string, text: st
   }
 
   // if it isn't XML, then let's hope assume Papaparse can handle it
-  const csv = Papaparse.parse(text, {
+  const csv = Papa.parse(text, {
     // preview: 10000,
     delimitersToGuess: ['\t', ';', ','],
     comments: '#',

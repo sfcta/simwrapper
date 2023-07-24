@@ -1,8 +1,8 @@
 /*eslint prefer-rest-params: "off"*/
 
 import pako from 'pako'
-import Papaparse from 'papaparse'
 import DBF from '@/js/dbfReader'
+import Papa from '@simwrapper/papaparse'
 
 import { DataTableColumn, DataTable, DataType, FileSystemConfig } from '@/Globals'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
@@ -15,6 +15,7 @@ let _files: string[] = []
 let _config: any = {}
 let _dataset = ''
 let _buffer: Uint8Array
+let _highPrecision = false
 
 const _fileData: { [key: string]: DataTable } = {}
 
@@ -29,9 +30,11 @@ async function fetchData(props: {
   config: string
   buffer: Uint8Array
   featureProperties?: any[]
+  options?: { highPrecision: boolean }
 }) {
   _config = props.config
   _dataset = _config.dataset
+  if (props.options?.highPrecision) _highPrecision = true
 
   // Did we get featureProperties array? Just need to convert it to DataTable
   if (props.featureProperties) {
@@ -101,10 +104,12 @@ function convertFeaturePropertiesToDataTable(features: any[]) {
 
   // 2. Determine column types based on first row (scary but necessary?)
   for (const columnId of headers) {
-    let values: any[] | Float32Array
+    let values: any[] | Float32Array | Float64Array
     let columnType = DataType.NUMBER
     if (typeof firstRow[columnId] == 'number') {
-      values = new Float32Array(features.length)
+      values = _highPrecision
+        ? new Float64Array(features.length)
+        : new Float32Array(features.length)
       values.fill(NaN)
     } else {
       values = []
@@ -147,14 +152,13 @@ async function loadFile() {
 }
 
 async function parseData(filename: string, buffer: Uint8Array) {
-  if (filename.endsWith('.dbf') || filename.endsWith('.DBF')) {
+  if (filename && filename.toLocaleLowerCase().endsWith('.dbf')) {
     const dataTable = DBF(buffer, new TextDecoder('windows-1252')) // dbf has a weird default textcode
     calculateMaxValues(_dataset, dataTable)
     _fileData[_dataset] = dataTable
   } else {
     // convert text to utf-8
     const text = new TextDecoder().decode(buffer)
-
     // parse the text: we can handle CSV or XML
     await parseVariousFileTypes(_dataset, filename, text)
   }
@@ -199,14 +203,14 @@ function parseCsvFile(fileKey: string, filename: string, text: string) {
   const dataTable: DataTable = {}
 
   const headerLookup: any = {}
-  const csv = Papaparse.parse(text, {
+  const csv = Papa.parse(text, {
     // preview: 10000,
     delimitersToGuess: ['\t', ';', ',', ' '],
     comments: '#',
     skipEmptyLines: true,
     dynamicTyping: true,
     header: true,
-    transformHeader: (column, index) => {
+    transformHeader: (column: any, index: any) => {
       // add _1,_2 suffixes to any header labels that are repeated; e.g. 00,..,24,00_1
       if (!headerLookup[column]) headerLookup[column] = 0
       headerLookup[column] += 1
@@ -221,14 +225,14 @@ function parseCsvFile(fileKey: string, filename: string, text: string) {
     let dropColumns: string[] = Array.isArray(_config.drop) ? _config.drop : _config.drop.split(',')
     if (dropColumns.length) {
       console.log('DROPPING', dropColumns)
-      headers = headers.filter(header => dropColumns.indexOf(header) == -1)
+      headers = headers.filter((header: any) => dropColumns.indexOf(header) == -1)
     }
   }
   if (_config.keep) {
     let keepColumns: string[] = Array.isArray(_config.keep) ? _config.keep : _config.keep.split(',')
     if (keepColumns.length) {
       console.log('KEEPING', keepColumns)
-      headers = headers.filter(header => keepColumns.indexOf(header) > -1)
+      headers = headers.filter((header: any) => keepColumns.indexOf(header) > -1)
     }
   }
 
@@ -237,7 +241,9 @@ function parseCsvFile(fileKey: string, filename: string, text: string) {
   // First we assume everything is a number.
   // Then if/when we find out otherwise, we will convert to a regular JS array as needed
   for (const column of headers) {
-    const values = new Float32Array(csv.data.length).fill(NaN)
+    const values = _highPrecision
+      ? new Float64Array(csv.data.length).fill(NaN)
+      : new Float32Array(csv.data.length).fill(NaN)
     dataTable[column] = { name: column, values, type: DataType.NUMBER } // Assume NUMBER for now
   }
 
@@ -294,7 +300,7 @@ function badparseCsvFile(fileKey: string, filename: string, text: string) {
   // console.log('c1')
   const dataTable: DataTable = {}
 
-  const csv = Papaparse.parse(text, {
+  const csv = Papa.parse(text, {
     // preview: 10000,
     delimitersToGuess: ['\t', ';', ','],
     comments: '#',

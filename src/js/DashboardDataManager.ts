@@ -7,16 +7,16 @@
  * Each tabbed dashboard should instantiate this class once, and destroy it when the dashboard
  * is closed. Datasets can be big, we don't want them to stick around forever!
  *
- * Data queries will return -both- the full dataset AND a filtered dataset. That way
- * the filtered data can be visually layered on top of the full data.
+ * Data queries always return -both- the full dataset AND a filtered dataset.
+ * That way, the filtered data can be visually layered on top of the full data.
  */
 
 import { rollup } from 'd3-array'
 
-import { DataTable, DataTableColumn, FileSystemConfig, Status } from '@/Globals'
 import globalStore from '@/store'
-import { findMatchingGlobInFiles } from '@/js/util'
 import HTTPFileSystem from './HTTPFileSystem'
+import { DataTable, DataTableColumn, DataType, FileSystemConfig, Status } from '@/Globals'
+import { findMatchingGlobInFiles } from '@/js/util'
 
 import DataFetcherWorker from '@/workers/DataFetcher.worker.ts?worker'
 import RoadNetworkLoader from '@/workers/RoadNetworkLoader.worker.ts?worker'
@@ -46,14 +46,20 @@ export interface NetworkLinks {
   source: Float32Array
   dest: Float32Array
   linkIds: any[]
+  projection: String
 }
+
+// This tells us if our environment has the Chrome File System Access API, meaning we are in Chrome
+//@ts-ignore
+const isChrome = !!window.showDirectoryPicker
+const isFirefox = !isChrome
 
 export default class DashboardDataManager {
   constructor(...args: string[]) {
     // hello
     this.root = args.length ? args[0] : ''
     this.subfolder = args.length ? args[1] : ''
-    this.fileApi = this.getFileSystem(this.root)
+    this.fileApi = this._getFileSystem(this.root)
   }
 
   private files: any[] = []
@@ -67,7 +73,9 @@ export default class DashboardDataManager {
     for (const worker of this.threads) worker.terminate()
   }
 
-  public getFilteredDataset(config: { dataset: string }) {
+  public getFilteredDataset(config: { dataset: string }): { filteredRows: any[] | null } {
+    if (!(config.dataset in this.datasets)) return { filteredRows: null }
+
     const filteredRows = this.datasets[config.dataset].filteredRows
     return { filteredRows }
   }
@@ -100,27 +108,32 @@ export default class DashboardDataManager {
 
   /**
    *
-   * @param config the configuration params from the YAML file. Must include dataset, and other optional parameters as needed by the viz
-   * @returns object with {x,y} or {allRows[]}
+   * @param config the configuration params from the YAML file. Must include dataset,
+   *               and may include other optional parameters as needed by the viz
+   * @returns allRows object, containing a DataTableColumn for each column in this dataset
    */
-  public async getDataset(config: configuration) {
+  public async getDataset(config: configuration, options?: { highPrecision: boolean }) {
     try {
       // first, get the dataset
       if (!this.datasets[config.dataset]) {
         console.log('load:', config.dataset)
 
-        // fetchDataset() immediately returns a Promise<>, which we wait on
+        // fetchDataset() immediately returns a Promise<>, which we await on
         // so that multiple charts don't all try to fetch the dataset individually
         this.datasets[config.dataset] = {
-          dataset: this.fetchDataset(config),
+          dataset: this._fetchDataset(config, options),
           activeFilters: {},
           filteredRows: null,
           filterListeners: new Set(),
         }
       }
 
+      // wait for dataset to load
+      // (this will immediately return dataset if it is already loaded)
       let myDataset = await this.datasets[config.dataset].dataset
 
+      // make a copy because each viz in a dashboard might be hacking it differently
+      // TODO: be more "functional" and return the object itself, and let views create copies if they need to
       let allRows = { ...myDataset }
 
       // remove ignored columns
@@ -130,7 +143,7 @@ export default class DashboardDataManager {
         })
       }
 
-      // if useLastRow, do that
+      // if useLastRow, drop all rows except the last row
       if (config.useLastRow) {
         Object.keys(allRows).forEach(colName => {
           const values = myDataset[colName].values
@@ -165,6 +178,7 @@ export default class DashboardDataManager {
         const thread = new DataFetcherWorker()
         // console.log('NEW WORKER', thread)
         this.threads.push(thread)
+
         try {
           thread.postMessage({ config: fullConfig, featureProperties })
 
@@ -192,40 +206,36 @@ export default class DashboardDataManager {
     return this.datasets[key].dataset
   }
 
-  public setPreloadedDataset(props: { key: string; dataTable: DataTable; filename: string }) {
-    this.datasets[props.filename] = {
+  /**
+   *  Register an existing in-memory DataTable as a dataset in this Dashboard
+   * @param props key, dataTable, and filename associated with this DataTable
+   */
+  public setPreloadedDataset(props: { key: string; dataTable: DataTable }) {
+    // let filters = {}
+    // if (this.datasets[props.key]) {
+    //   filters = this.datasets[props.key].activeFilters
+    // }
+
+    this.datasets[props.key] = {
       dataset: new Promise<DataTable>((resolve, reject) => {
         resolve(props.dataTable)
       }),
-      activeFilters: {},
+      activeFilters: {}, // filters,
       filteredRows: null,
       filterListeners: new Set(),
     }
   }
 
-  public async getRoadNetwork(filename: string, subfolder: string, vizDetails: any) {
+  public async getRoadNetwork(
+    filename: string,
+    subfolder: string,
+    vizDetails: any,
+    cbStatus?: any
+  ) {
     const path = `/${subfolder}/${filename}`
-
     // Get the dataset the first time it is requested
     if (!this.networks[path]) {
-      console.log('load network:', path)
-
-      // get folder
-      let folder =
-        path.indexOf('/') > -1 ? path.substring(0, path.lastIndexOf('/')) : this.subfolder
-
-      // get file path search pattern
-      const { files } = await new HTTPFileSystem(this.fileApi).getDirectory(folder)
-      let pattern = path.indexOf('/') === -1 ? path : path.substring(path.lastIndexOf('/') + 1)
-      const match = findMatchingGlobInFiles(files, pattern)
-
-      if (match.length === 1) {
-        // fetchNetwork immediately returns a Promise<>, which we wait on so that
-        // multiple views don't all try to fetch the network individually
-        this.networks[path] = this.fetchNetwork(`${folder}/${match[0]}`, vizDetails)
-      } else {
-        throw Error('File not found: ' + path)
-      }
+      this.networks[path] = this._fetchNetwork({ subfolder, filename, vizDetails, cbStatus })
     }
 
     // wait for the worker to provide the network
@@ -289,9 +299,18 @@ export default class DashboardDataManager {
   public setFilter(filter: FilterDefinition) {
     const { dataset, column, value, invert, range } = filter
 
+    if (!this.datasets[dataset]) {
+      console.warn(`${dataset} doesn't exist yet`)
+      console.warn(Object.keys(this.datasets))
+      return
+    }
     console.log('> setFilter', dataset, column, value)
+
     // Filter might be single or an array; make it an array.
     const values = Array.isArray(value) ? value : [value]
+    if (this.datasets[dataset].activeFilters == null) {
+      this.datasets[dataset].activeFilters = {}
+    }
     const allFilters = this.datasets[dataset].activeFilters
     // a second click on a filter means REMOVE this filter.
     // if (allFilters[column] !== undefined && allFilters[column] === values) {
@@ -303,7 +322,7 @@ export default class DashboardDataManager {
     } else {
       allFilters[column] = { values, invert, range }
     }
-    this.updateFilters(dataset) // this is async
+    this._updateFilters(dataset) // this is async
   }
 
   public addFilterListener(config: { dataset: string }, listener: any) {
@@ -332,7 +351,7 @@ export default class DashboardDataManager {
 
   // ---- PRIVATE STUFFS -----------------------
 
-  private async updateFilters(datasetId: string) {
+  private async _updateFilters(datasetId: string) {
     console.log('> updateFilters ', datasetId)
     const metaData = this.datasets[datasetId]
     console.log({ metaData })
@@ -340,7 +359,7 @@ export default class DashboardDataManager {
     if (!Object.keys(metaData.activeFilters).length) {
       console.log('no keys')
       metaData.filteredRows = null
-      this.notifyListeners(datasetId)
+      this._notifyListeners(datasetId)
       return
     }
 
@@ -359,6 +378,7 @@ export default class DashboardDataManager {
     const hasMatchedFilters = new Array(numberOfRowsInFullDataset).fill(true)
 
     const ltgt = /^(<|>)/ // starts with < or >
+    //            (╯° °)╯︵ ┻━┻
 
     for (const [column, spec] of Object.entries(metaData.activeFilters)) {
       const dataColumn = dataset[column]
@@ -406,50 +426,62 @@ export default class DashboardDataManager {
       }
     }
 
+    // For now let's leave the filtered rows as an array of data objects
+
+    // // CONVERT array of objects to column-based DataTableColumns
+    // const filteredDataTable: { [id: string]: DataTableColumn } = {}
+    // allColumns.forEach(columnId => {
+    //   const column = { name: columnId, values: [], type: DataType.UNKNOWN } as any
+    //   for (const row of filteredRows) column.values.push(row[columnId])
+    //   filteredDataTable[columnId] = column
+    // })
+
+    // metaData.filteredRows = filteredDataTable as any
+
     metaData.filteredRows = filteredRows
-    this.notifyListeners(datasetId)
+    this._notifyListeners(datasetId)
   }
 
-  private checkFilterValue(
-    spec: { conditional: string; invert: boolean; values: any[] },
-    elementValue: any
-  ) {
-    // lookup closure functions for < > <= >=
-    const conditionals: any = {
-      '<': () => {
-        return elementValue < spec.values[0]
-      },
-      '<=': () => {
-        return elementValue <= spec.values[0]
-      },
-      '>': () => {
-        return elementValue > spec.values[0]
-      },
-      '>=': () => {
-        return elementValue >= spec.values[0]
-      },
-    }
+  // private _checkFilterValue(
+  //   spec: { conditional: string; invert: boolean; values: any[] },
+  //   elementValue: any
+  // ) {
+  //   // lookup closure functions for < > <= >=
+  //   const conditionals: any = {
+  //     '<': () => {
+  //       return elementValue < spec.values[0]
+  //     },
+  //     '<=': () => {
+  //       return elementValue <= spec.values[0]
+  //     },
+  //     '>': () => {
+  //       return elementValue > spec.values[0]
+  //     },
+  //     '>=': () => {
+  //       return elementValue >= spec.values[0]
+  //     },
+  //   }
 
-    let isValueInFilterSpec: boolean
+  //   let isValueInFilterSpec: boolean
 
-    if (spec.conditional) {
-      isValueInFilterSpec = conditionals[spec.conditional]()
-    } else {
-      isValueInFilterSpec = spec.values.includes(elementValue)
-    }
+  //   if (spec.conditional) {
+  //     isValueInFilterSpec = conditionals[spec.conditional]()
+  //   } else {
+  //     isValueInFilterSpec = spec.values.includes(elementValue)
+  //   }
 
-    if (spec.invert) return !isValueInFilterSpec
-    return isValueInFilterSpec
-  }
+  //   if (spec.invert) return !isValueInFilterSpec
+  //   return isValueInFilterSpec
+  // }
 
-  private notifyListeners(datasetId: string) {
+  private _notifyListeners(datasetId: string) {
     const dataset = this.datasets[datasetId]
     for (const notifyListener of dataset.filterListeners) {
       notifyListener(datasetId)
     }
   }
 
-  private async fetchDataset(config: { dataset: string }) {
+  private async _fetchDataset(config: { dataset: string }, options?: { highPrecision: boolean }) {
     if (!this.files.length) {
       const { files } = await new HTTPFileSystem(this.fileApi).getDirectory(this.subfolder)
       this.files = files
@@ -465,18 +497,21 @@ export default class DashboardDataManager {
           subfolder: this.subfolder,
           files: this.files,
           config: config,
+          options,
         })
 
         thread.onmessage = e => {
           thread.terminate()
           if (e.data.error) {
-            console.log(e.data.error)
-            // var msg = '' + e.data.error
-            //globalStore.commit('error', e.data.error)
+            let msg = '' + e.data.error
+            msg = msg.replace('[object Response]', 'Error loading file')
+
+            if (config?.dataset && msg.indexOf(config.dataset) === -1) msg += `: ${config.dataset}`
+
             globalStore.commit('setStatus', {
               type: Status.ERROR,
-              msg: `File not found: ${this.subfolder}/${config.dataset}`,
-              desc: 'Check filename and path.',
+              msg,
+              desc: JSON.stringify(config),
             })
             reject()
           }
@@ -490,35 +525,65 @@ export default class DashboardDataManager {
     })
   }
 
-  private async fetchNetwork(path: string, vizDetails: any) {
-    return new Promise<NetworkLinks>((resolve, reject) => {
-      const thread = new RoadNetworkLoader()
-      try {
-        thread.postMessage({
-          filePath: path,
-          fileSystem: this.fileApi,
-          vizDetails,
-        })
+  private async _fetchNetwork(props: {
+    subfolder: string
+    filename: string
+    vizDetails: any
+    cbStatus?: any
+  }) {
+    return new Promise<NetworkLinks>(async (resolve, reject) => {
+      const { subfolder, filename, vizDetails, cbStatus } = props
 
-        thread.onmessage = e => {
+      const path = `/${subfolder}/${filename}`
+      console.log('load network:', path)
+
+      // get folder
+      let folder =
+        path.indexOf('/') > -1 ? path.substring(0, path.lastIndexOf('/')) : this.subfolder
+
+      // get file path search pattern
+      const { files } = await new HTTPFileSystem(this.fileApi).getDirectory(folder)
+      let pattern = path.indexOf('/') === -1 ? path : path.substring(path.lastIndexOf('/') + 1)
+      const match = findMatchingGlobInFiles(files, pattern)
+
+      if (match.length !== 1) reject('File not found: ' + path)
+
+      const thread = new RoadNetworkLoader() as any
+      try {
+        thread.onmessage = (e: MessageEvent) => {
           // perhaps network has no CRS and we need to ask user
           if (e.data.promptUserForCRS) {
             let crs =
               prompt('Enter the coordinate reference system, e.g. EPSG:25832') || 'EPSG:31468'
-            if (!isNaN(parseInt(crs))) crs = `EPSG:${crs}`
+            if (Number.isInteger(parseInt(crs))) crs = `EPSG:${crs}`
 
             thread.postMessage({ crs })
             return
           }
 
+          // notify client of status update messages
+          if (e.data.status) {
+            if (cbStatus) cbStatus(e.data.status)
+            return
+          }
+
           // normal exit
           thread.terminate()
+
           if (e.data.error) {
             console.error(e.data.error)
             reject(e.data.error)
           }
+
           resolve(e.data.links)
         }
+
+        thread.postMessage({
+          filePath: path,
+          fileSystem: this.fileApi,
+          vizDetails,
+          isFirefox, // we need this for now, because Firefox bug #260
+        })
       } catch (err) {
         thread.terminate()
         console.error(err)
@@ -527,7 +592,7 @@ export default class DashboardDataManager {
     })
   }
 
-  private getFileSystem(name: string) {
+  private _getFileSystem(name: string) {
     const svnProject: FileSystemConfig[] = globalStore.state.svnProjects.filter(
       (a: FileSystemConfig) => a.slug === name
     )

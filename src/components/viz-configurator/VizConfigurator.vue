@@ -239,12 +239,20 @@ export default defineComponent({
         filters: {},
       } as any
 
+      // define shapefile join column, if we have one
+      if (typeof this.vizDetails.shapes === 'object' && this.vizDetails.shapes.join) {
+        config.shapes = { file: config.shapes, join: this.vizDetails.shapes.join }
+      }
+
       // remove pitch and bearing if they're zero
       if (!this.$store.state.viewState.bearing) delete config.bearing
       if (!this.$store.state.viewState.pitch) delete config.pitch
 
       // remove shapefile itself from list of datasets
-      const shapeFilename = config.shapes?.substring(1 + config.shapes.indexOf('/'))
+      const shapeFilename =
+        typeof config.shapes === 'string'
+          ? config?.shapes?.substring(1 + config.shapes.lastIndexOf('/'))
+          : config?.shapes?.file?.substring(1 + config.shapes.file.lastIndexOf('/') || 0)
       if (config.datasets[shapeFilename]) delete config.datasets[shapeFilename]
 
       // remove blank and false values
@@ -267,15 +275,24 @@ export default defineComponent({
         }
       }
       if (config.display.lineColor) {
-        if (config.display.lineColor.colorRamp) {
-          delete config.display.lineColor.colorRamp?.style
-          delete config.display.lineColor.fixedColors
-          if (!config.display.lineColor.colorRamp.reverse) {
-            delete config.display.lineColor.colorRamp.reverse
-          }
+        console.log(555, config.display.lineColor)
+        // no-lines: set to false
+        if (
+          config.display.lineColor.fixedColors &&
+          config.display.lineColor.fixedColors[0] === ''
+        ) {
+          config.display.lineColor = false
         } else {
-          delete config.display.lineColor.dataset
-          delete config.display.lineColor.columnName
+          if (config.display.lineColor.colorRamp) {
+            delete config.display.lineColor.colorRamp?.style
+            delete config.display.lineColor.fixedColors
+            if (!config.display.lineColor.colorRamp.reverse) {
+              delete config.display.lineColor.colorRamp.reverse
+            }
+          } else {
+            delete config.display.lineColor.dataset
+            delete config.display.lineColor.columnName
+          }
         }
       }
 
@@ -298,18 +315,27 @@ export default defineComponent({
         }
       }
 
-      // clean up datasets filenames
+      // clean up datasets filenames & joins
       if (config.datasets) {
         for (const [key, filenameOrObject] of Object.entries(config.datasets) as any[]) {
           if (typeof filenameOrObject.file === 'object') {
             config.datasets[key].file = filenameOrObject.file?.name || filenameOrObject.file || key
+          }
+          // remove old join statements
+          if (typeof filenameOrObject === 'object') {
+            delete config.datasets[key].join
+            // simplify: if all we have is a filename, convert object to string
+            if (Object.keys(config.datasets[key]).length == 1 && config.datasets[key].file) {
+              config.datasets[key] = config.datasets[key].file
+            }
           }
         }
       }
 
       // delete empty display sections
       for (const entries of Object.entries(config.display) as any[]) {
-        console.log(entries)
+        // user can disable a section (lines ahem!) by setting it to false
+        if (entries[1] === false) continue
         if (!Object.keys(entries[1]).length) delete config.display[entries[0]]
       }
 
