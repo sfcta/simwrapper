@@ -1,0 +1,2 @@
+var t=Object.defineProperty,e=(e,s,n)=>(((e,s,n)=>{s in e?t(e,s,{enumerable:!0,configurable:!0,writable:!0,value:n}):e[s]=n})(e,"symbol"!=typeof s?s+"":s,n),n);class s{constructor(){e(this,"internalState",{message:"",sections:[]})}get state(){return this.internalState}clear(t){this.internalState.sections=t?this.internalState.sections.filter((e=>e.section!==t)):[]}setLegendSection(t){this.clear(t.section),this.internalState.sections.unshift(t),this.internalState.sections.sort(((t,e)=>t.section<e.section?-1:1))}}export{s as L};
+//# sourceMappingURL=LegendStore.11164198.js.map

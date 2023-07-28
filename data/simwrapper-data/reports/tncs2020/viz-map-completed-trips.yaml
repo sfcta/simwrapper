@@ -1,0 +1,35 @@
+title: TNCs 2020
+zoom: 6.0
+center:
+    - -117.96
+    - 37.74
+pitch: 60
+bearing: 35
+shapes: ../../gis/zcta/zcta_simplified.geojson
+datasets:
+    tnc:
+        file: ./trips_zipcode.csv
+        join: ZCTA5CE20:zipcode
+display:
+    fill:
+        dataset: tnc
+        columnName: completed_trips
+        normalize: tnc:sqmi
+        colorRamp:
+            ramp: Oranges
+            steps: 9
+    lineColor:
+        generatedColors:
+            - ""
+    fillHeight:
+        dataset: tnc
+        columnName: completed_trips
+        normalize: tnc:sqmi
+        scaleFactor: 20
+        
+tooltip:
+  - tnc.zipcode
+  - tnc.county
+  - tnc.completed_trips
+  - tnc.unaccepted_requests
+  - tnc.sqmi

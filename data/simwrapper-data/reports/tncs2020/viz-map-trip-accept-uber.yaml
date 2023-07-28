@@ -1,0 +1,31 @@
+title: TNCs 2020
+zoom: 5.3
+center:
+    - -119.35
+    - 37.76
+shapes: ../../gis/zcta/zcta_simplified.geojson
+datasets:
+    tnc:
+        file: ./trips_zipcode.csv
+        join: ZCTA5CE20:zipcode
+    zcta_simplified.geojson:
+        file: zcta_simplified.geojson
+        join: ""
+display:
+    fill:
+        dataset: tnc
+        columnName: Uber_perfect
+        colorRamp:
+            ramp: Oranges
+            steps: 2
+    lineColor:
+        fixedColors:
+            - ""
+    lineWidth:
+        dataset: "@0"
+        columnName: ""
+        scaleFactor: 1
+tooltip:
+  - tnc.zipcode
+  - tnc.Uber_share_completed
+  - tnc.Lyft_share_completed
