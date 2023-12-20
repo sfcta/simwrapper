@@ -179,7 +179,7 @@ export default defineComponent({
         else this.updateChartSimple()
       } catch (e) {
         const msg = '' + e
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.ERROR,
           msg,
           desc: 'Add a desription...',
@@ -206,9 +206,23 @@ export default defineComponent({
       // // old configs called it "usedCol" --> now "columns"
       const columns = this.config.columns || this.config.usedCol || [this.config.y] || []
 
-      var legendname = columns
+      let legendname = columns
       if (this.config.legendName) legendname = this.config.legendName
       if (this.config.legendTitle) legendname = this.config.legendTitle
+
+      // check for valid columns
+      let status = true
+      const check = ['x']
+      for (const col of check) {
+        if (!allRows[this.config[col]]) {
+          this.$store.commit(
+            'error',
+            `${this.cardTitle}: "${this.config.dataset}" ${check} column "${col}" missing`
+          )
+          status = false
+        }
+      }
+      if (!status) return
 
       let x = allRows[this.config.x].values || []
       if (this.config.skipFirstRow) x = x.slice(1)

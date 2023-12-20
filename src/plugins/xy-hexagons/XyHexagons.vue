@@ -7,7 +7,7 @@
   )
 
   zoom-buttons(v-if="!thumbnail")
-  drawing-tool.drawing-tool(v-if="!thumbnail")
+  //- drawing-tool.drawing-tool(v-if="!thumbnail")
 
   .left-side(v-if="isLoaded && !thumbnail && vizDetails.title")
     collapsible-panel(direction="left" :locked="true")
@@ -20,26 +20,28 @@
         //- :class="{'is-dashboard': config !== undefined }"
 
         .panel-item(v-for="group in Object.keys(aggregations)" :key="group")
-          p.speed-label {{ group }}
+          p.ui-label {{ group }}
           button.button.is-small.aggregation-button(
             v-for="element,i in aggregations[group]"
             :key="i"
             :style="{'margin-bottom': '0.25rem', 'color': activeAggregation===`${group}~${i}` ? 'white' : buttonColors[i], 'border': `1px solid ${buttonColors[i]}`, 'border-right': `0.4rem solid ${buttonColors[i]}`,'border-radius': '4px', 'background-color': activeAggregation===`${group}~${i}` ? buttonColors[i] : $store.state.isDarkMode ? '#333':'white'}"
             @click="handleOrigDest(group,i)") {{ element.title }}
 
-        .panel-item.right
-          p.speed-label {{ $t('maxHeight') }}: {{ vizDetails.maxHeight }}
-          vue-slider.speed-slider(v-model="vizDetails.maxHeight"
-            :min="0" :max="250" :interval="5"
+        .panel-item
+          p.ui-label {{ $t('maxHeight') }}: {{ vizDetails.maxHeight }}
+          b-slider.ui-slider(v-model="vizDetails.maxHeight"
+            size="is-small"
+            :min="0" :max="250" :step="5"
             :duration="0" :dotSize="12"
-            tooltip="none"
+            :tooltip="false"
           )
 
-          p.speed-label Hex Radius: {{ vizDetails.radius }}
-          vue-slider.speed-slider(v-model="vizDetails.radius"
-            :min="50" :max="1000" :interval="5"
+          p.ui-label Hex Radius: {{ vizDetails.radius }}
+          b-slider.ui-slider(v-model="vizDetails.radius"
+            size="is-small"
+            :min="50" :max="1000" :step="5"
             :duration="0" :dotSize="12"
-            tooltip="none"
+            :tooltip="false"
           )
 
   .message(v-if="!thumbnail && myState.statusMessage")
@@ -72,10 +74,10 @@ const i18n = {
     },
   },
 }
+import Vue from 'vue'
 import { defineComponent } from 'vue'
 import type { PropType } from 'vue'
 
-import VueSlider from 'vue-slider-component'
 import { ToggleButton } from 'vue-js-toggle-button'
 import YAML from 'yaml'
 
@@ -131,7 +133,6 @@ const MyComponent = defineComponent({
     CollapsiblePanel,
     DrawingTool,
     XyHexDeckMap,
-    VueSlider,
     ToggleButton,
     ZoomButtons,
   },
@@ -455,9 +456,13 @@ const MyComponent = defineComponent({
     },
 
     setRadiusAndHeight() {
-      if (!this.vizDetails.radius) this.vizDetails.radius = 250
+      if (!this.vizDetails.radius) {
+        Vue.set(this.vizDetails, 'radius', 250)
+      }
 
-      if (!this.vizDetails.maxHeight) this.vizDetails.maxHeight = 0
+      if (!this.vizDetails.maxHeight) {
+        Vue.set(this.vizDetails, 'maxHeight', 0)
+      }
     },
 
     async loadStandaloneYAMLConfig() {
@@ -476,7 +481,7 @@ const MyComponent = defineComponent({
         const e = err as any
         console.log('failed')
 
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.ERROR,
           msg: `File not found`,
           desc: `Could not find: ${this.myState.subfolder}/${this.myState.yamlConfig}`,
@@ -485,8 +490,6 @@ const MyComponent = defineComponent({
     },
 
     validateYAML() {
-      console.log('in yaml validation 2')
-
       const hasYaml = new RegExp('.*(yml|yaml)$').test(this.myState.yamlConfig)
       let configuration = {} as any
 
@@ -500,16 +503,16 @@ const MyComponent = defineComponent({
 
       for (const key in this.YAMLrequirementsXY) {
         if (!(key in configuration)) {
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.ERROR,
-            msg: `${this.yamlConfig}: missing required key: ${key}`,
-            desc: 'Check this.YAMLrequirementsXY for required keys',
+            msg: `XYHexagon: ${this.yamlConfig}: missing required key: ${key}`,
+            desc: `XYHexagon requires ${Object.keys(this.YAMLrequirementsXY)}`,
           })
         }
       }
 
       if (configuration.radius == 0) {
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.WARNING,
           msg: `Radius set to zero`,
           desc: 'Radius can not be zero, preset value used instead. ',
@@ -517,7 +520,7 @@ const MyComponent = defineComponent({
       }
 
       if (configuration.zoom < 5 || configuration.zoom > 20) {
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.WARNING,
           msg: `Zoom is out of the recommended range `,
           desc: 'Zoom levels should be between 5 and 20. ',
@@ -593,6 +596,9 @@ const MyComponent = defineComponent({
         // bounce our map
         if (REACT_VIEW_HANDLES[this.id]) REACT_VIEW_HANDLES[this.id](view)
 
+        // Sets the map to the specified data
+        this.$store.commit('setMapCamera', Object.assign({}, view))
+
         return
       }
 
@@ -655,7 +661,7 @@ const MyComponent = defineComponent({
           this.myState.statusMessage = buffer.data.status
         } else if (buffer.data.error) {
           this.myState.statusMessage = buffer.data.error
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.ERROR,
             msg: `Loading Error`,
             desc: 'Error loading: ${this.myState.subfolder}/${this.vizDetails.file}',
@@ -697,7 +703,7 @@ const MyComponent = defineComponent({
       } catch (e) {
         console.error(e)
         this.myState.statusMessage = '' + e
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.ERROR,
           msg: `Loading/Parsing Error`,
           desc: 'Error loading/parsing: ${this.myState.subfolder}/${this.vizDetails.file}',
@@ -803,16 +809,10 @@ export default MyComponent
   }
 }
 
-.speed-block {
-  margin-top: 1rem;
-}
-
-.legend-block {
-  margin-top: 2rem;
-}
-
-.speed-slider {
-  min-width: 6rem;
+.ui-slider {
+  padding: 0 0;
+  margin: 0.2rem 0 0.6rem 0;
+  min-width: 7rem;
 }
 
 .status-message {
@@ -864,7 +864,7 @@ export default MyComponent
   pointer-events: auto;
 }
 
-.speed-label {
+.ui-label {
   font-size: 0.8rem;
   font-weight: bold;
 }
@@ -882,6 +882,7 @@ export default MyComponent
   display: flex;
   flex-direction: column;
   margin-right: 1rem;
+  margin-left: 0.25rem;
 }
 
 .right {

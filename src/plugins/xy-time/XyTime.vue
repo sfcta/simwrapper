@@ -34,6 +34,15 @@
   .message(v-if="!thumbnail && myState.statusMessage")
     p.status-message {{ myState.statusMessage }}
 
+  modal-dialog-custom-colorbreakpoint(v-if="this.showCustomBreakpoints"
+    :breakpointsProp="this.breakpoints"
+    :colorsProp="this.colors"
+    @close="showCustomBreakpoints = false"
+    @updateColor="(colorArray) => this.setLegend(colorArray, this.breakpoints)"
+    @updateBreakpoint="(breakpointArray) => this.setLegend(this.colors, breakpointArray)"
+    @addOrRemoveBreakpoint="(colorArray, breakpointArray) => this.setLegend(colorArray, breakpointArray)"
+  )
+
 </template>
 
 <script lang="ts">
@@ -80,6 +89,7 @@ import TimeSlider from '@/components/TimeSlider.vue'
 import XyTimeDeckMap from './XyTimeDeckMap'
 import XytDataParser from './XytDataParser.worker.ts?worker'
 import ZoomButtons from '@/components/ZoomButtons.vue'
+import ModalDialogCustomColorbreakpoint from './ModalDialogCustomColorbreakpoint.vue'
 
 import {
   ColorScheme,
@@ -126,6 +136,7 @@ const MyComponent = defineComponent({
     TimeSlider,
     ZoomButtons,
     XyTimeDeckMap,
+    ModalDialogCustomColorbreakpoint,
   },
   props: {
     root: { type: String, required: true },
@@ -134,7 +145,7 @@ const MyComponent = defineComponent({
     config: Object,
     thumbnail: Boolean,
   },
-  data: () => {
+  data() {
     return {
       guiConfig: {
         buckets: 7,
@@ -144,8 +155,13 @@ const MyComponent = defineComponent({
         'color ramp': 'viridis',
         colorRamps: ['bathymetry', 'electric', 'inferno', 'jet', 'magma', 'par', 'viridis'],
         flip: false,
+        // @ts-ignore ->
+        'Custom breakpoints...': this.toggleModalDialog,
         'manual breaks': '',
       },
+      minRadius: 5,
+      maxRadius: 50,
+      showCustomBreakpoints: false,
       viewId: `xyt-id-${Math.floor(1e12 * Math.random())}` as any,
       configId: `gui-config-${Math.floor(1e12 * Math.random())}` as any,
       timeLabels: [0, 1] as any[],
@@ -155,7 +171,7 @@ const MyComponent = defineComponent({
       colors: [
         [128, 128, 128],
         [128, 128, 128],
-      ] as number[][],
+      ] as any[][],
       breakpoints: [0.0],
       range: [Infinity, -Infinity],
       timeRange: [Infinity, -Infinity],
@@ -189,7 +205,7 @@ const MyComponent = defineComponent({
         radius: 5,
         colorRamp: 'viridis',
         flip: false,
-        breakpoints: '',
+        breakpoints: null as any,
       } as VizDetail,
       myState: {
         statusMessage: '',
@@ -271,6 +287,9 @@ const MyComponent = defineComponent({
     },
   },
   methods: {
+    toggleModalDialog() {
+      this.showCustomBreakpoints = !this.showCustomBreakpoints
+    },
     handleTimeSliderValues(timeValues: any[]) {
       this.animationElapsedTime = timeValues[0]
       this.timeFilter = timeValues
@@ -304,7 +323,7 @@ const MyComponent = defineComponent({
       })
 
       const config = this.guiController // .addFolder('Colors')
-      config.add(this.guiConfig, 'radius', 1, 20, 1)
+      config.add(this.guiConfig, 'radius', this.minRadius, this.maxRadius, 1)
 
       const colors = config.addFolder('colors')
       colors.add(this.guiConfig, 'color ramp', this.guiConfig.colorRamps).onChange(this.setColors)
@@ -314,9 +333,7 @@ const MyComponent = defineComponent({
       breakpoints.add(this.guiConfig, 'buckets', 2, 19, 1).onChange(this.setColors)
       breakpoints.add(this.guiConfig, 'clip max', 0, 100, 1).onChange(this.setColors)
       breakpoints.add(this.guiConfig, 'exponent', 1, 10, 1).onChange(this.setColors)
-      breakpoints.add(this.guiConfig, 'manual breaks').onChange(this.setColors)
-
-      // const times = this.guiController.addFolder('Time')
+      breakpoints.add(this.guiConfig, 'Custom breakpoints...', 1, 100, 1)
     },
     async solveProjection() {
       if (this.thumbnail) return
@@ -337,6 +354,7 @@ const MyComponent = defineComponent({
       if (this.config) {
         this.validateYAML()
         this.vizDetails = Object.assign({}, this.config) as VizDetail
+        this.setCustomGuiConfig()
         return
       }
 
@@ -348,6 +366,39 @@ const MyComponent = defineComponent({
         // console.log('NO YAML WTF')
         this.setConfigForRawCSV()
       }
+    },
+
+    setCustomGuiConfig() {
+      if (!this.config) return
+
+      // Set custom radius
+      if (this.config.radius >= this.minRadius && this.config.radius <= this.maxRadius)
+        this.guiConfig.radius = this.config.radius
+
+      if (Object.prototype.toString.call(this.config.breakpoints) === '[object Array]') {
+        // Only breakpoints
+        this.setManualBreakpoints(this.config.breakpoints)
+      } else {
+        // Set custom breakpoints
+        if (this.config.breakpoints) {
+          if (this.config.breakpoints.values.length + 1 != this.config.breakpoints.colors.length) {
+            this.$emit('error', {
+              type: Status.ERROR,
+              msg: `Wrong number of colors and values for the breakpoints.`,
+              desc: `Number of colors: ${this.config.breakpoints.colors.length}, Number of values: ${this.config.breakpoints.values.length}, Must apply: Number of colors = number of values plus one.`,
+            })
+          } else {
+            this.guiConfig.buckets = this.config.breakpoints.colors.length
+            this.breakpoints = this.config.breakpoints.values
+            this.colors = this.config.breakpoints.colors
+          }
+        }
+      }
+    },
+
+    setManualBreakpoints(breakpoints: number[]) {
+      this.breakpoints = breakpoints
+      this.guiConfig.buckets = 1 + breakpoints.length
     },
 
     setConfigForRawCSV() {
@@ -383,7 +434,7 @@ const MyComponent = defineComponent({
         const e = err as any
         console.log('failed')
 
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.ERROR,
           msg: `File not found`,
           desc: `Could not find: ${this.myState.subfolder}/${this.myState.yamlConfig}`,
@@ -405,27 +456,27 @@ const MyComponent = defineComponent({
 
       for (const key in this.YAMLrequirementsXY) {
         if (key in configuration === false) {
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.ERROR,
-            msg: `YAML file missing required key: ${key}`,
-            desc: 'Check this.YAMLrequirementsXY for required keys',
+            msg: `XYTime missing required key: ${key}`,
+            desc: `XYTime requires keys: ${Object.keys(this.YAMLrequirementsXY)}`,
           })
         }
       }
 
       if (configuration.radius == 0) {
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.WARNING,
           msg: `Radius set to zero`,
           desc: 'Radius can not be zero, preset value used instead. ',
         })
       }
 
-      if (configuration.zoom < 5 || configuration.zoom > 20) {
-        this.$store.commit('setStatus', {
+      if (configuration.zoom < 5 || configuration.zoom > 50) {
+        this.$emit('error', {
           type: Status.WARNING,
           msg: `Zoom is out of the recommended range `,
-          desc: 'Zoom levels should be between 5 and 20. ',
+          desc: 'Zoom levels should be between 5 and 50. ',
         })
       }
     },
@@ -443,15 +494,6 @@ const MyComponent = defineComponent({
       if (this.vizDetails.radius) this.guiConfig.radius = this.vizDetails.radius
       if (this.vizDetails.clipMax) this.guiConfig['clip max'] = this.vizDetails.clipMax
       if (this.vizDetails.colorRamp) this.guiConfig['color ramp'] = this.vizDetails.colorRamp
-      if (this.vizDetails.breakpoints) this.guiConfig['manual breaks'] = this.vizDetails.breakpoints
-    },
-
-    setManualBreakpoints() {
-      const breakpoints = this.guiConfig['manual breaks'].split(',').map(b => {
-        return Number.parseFloat(b.trim())
-      })
-      this.breakpoints = breakpoints
-      this.guiConfig.buckets = 1 + breakpoints.length
     },
 
     async buildThumbnail() {
@@ -482,7 +524,7 @@ const MyComponent = defineComponent({
           this.myState.statusMessage = event.data.status
         } else if (event.data.error) {
           this.myState.statusMessage = event.data.error
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.ERROR,
             msg: `XYT Loading Error`,
             desc: `Error loading: ${this.myState.subfolder}/${this.vizDetails.file}`,
@@ -594,20 +636,16 @@ const MyComponent = defineComponent({
       // const clippedMin = (this.range[1] * this.clipData[0]) / 100.0
       // console.log({ max1, max2 })
 
-      // generate some breakpoints if user didn't supply them
-      if (this.guiConfig['manual breaks']) {
-        this.setManualBreakpoints()
-      } else {
-        if (!this.vizDetails.breakpoints) {
-          const breakpoints = [] as number[]
-          for (let i = 1; i < this.guiConfig.buckets; i++) {
-            const raw = (max2 * i) / this.guiConfig.buckets
-            const breakpoint = Math.pow(raw, EXPONENT)
-            breakpoints.push(breakpoint)
-          }
-
-          this.breakpoints = breakpoints
+      // Generate breakpoints only if there are not already set
+      if (!this.vizDetails.breakpoints) {
+        const breakpoints = [] as number[]
+        for (let i = 1; i < this.guiConfig.buckets; i++) {
+          const raw = (max2 * i) / this.guiConfig.buckets
+          const breakpoint = Math.pow(raw, EXPONENT)
+          breakpoints.push(breakpoint)
         }
+
+        this.breakpoints = breakpoints
       }
 
       // only update legend if we have the full dataset already
@@ -630,6 +668,7 @@ const MyComponent = defineComponent({
           return { label, value: rgb }
         }),
       })
+      this.breakpoints = breakpoints
     },
 
     async loadFiles() {
@@ -642,7 +681,7 @@ const MyComponent = defineComponent({
       } catch (e) {
         console.error(e)
         this.myState.statusMessage = '' + e
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.ERROR,
           msg: `Loading/Parsing Error`,
           desc: 'Error loading/parsing: ${this.myState.subfolder}/${this.vizDetails.file}',

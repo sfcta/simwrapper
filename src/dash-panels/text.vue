@@ -1,8 +1,10 @@
 <template lang="pug">
-.curate-content.markdown(
-  v-if="readmeContent"
-  v-html="readmeContent"
-)
+.panel-element
+  .scrollable
+    .curate-content.markdown(
+      v-if="readmeContent"
+      v-html="readmeContent"
+    )
 
 </template>
 
@@ -41,7 +43,7 @@ export default defineComponent({
       const text = await fileApi.getFileText(filename)
       this.readmeContent = mdRenderer.render(text)
     } catch (e: any) {
-      console.log({ e })
+      console.error({ e })
       let error = '' + e
       if (e.statusText) error = e.statusText
 
@@ -56,16 +58,17 @@ export default defineComponent({
 <style scoped lang="scss">
 @import '@/styles.scss';
 
-.dash-element {
+.panel-element {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
   right: 0;
-  display: flex;
-  flex-direction: column;
 }
 
-@media only screen and (max-width: 640px) {
+.scrollable {
+  overflow: auto;
+  height: 100%;
+  width: 100%;
 }
 </style>

@@ -30,6 +30,7 @@ export default defineComponent({
     cardId: String,
     datamanager: { type: Object as PropType<DashboardDataManager>, required: true },
   },
+
   data: () => {
     return {
       globalState: globalStore.state,
@@ -183,14 +184,12 @@ export default defineComponent({
     },
 
     validateYAML() {
-      console.log('in area validation')
-
       for (const key in this.YAMLrequirementsArea) {
         if (key in this.config === false) {
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.ERROR,
-            msg: `YAML file missing required key: ${key}`,
-            desc: 'Check this.YAMLrequirementsXY for required keys',
+            msg: `Area chart missing required key: ${key}`,
+            desc: `Required keys: ${Object.keys(this.YAMLrequirementsArea)}`,
           })
         }
       }
@@ -202,7 +201,7 @@ export default defineComponent({
         else this.updateChartSimple()
       } catch (e) {
         const msg = '' + e
-        this.$store.commit('setStatus', { type: Status.ERROR, msg })
+        this.$emit('error', { type: Status.ERROR, msg })
       }
     },
 
@@ -229,6 +228,15 @@ export default defineComponent({
       // old legendname field
       if (this.config.legendName) this.config.legendTitles = this.config.legendName
       if (this.config.legendTitles?.length) useOwnNames = true
+
+      // check for x column
+      if (!allRows[this.config.x]) {
+        this.$store.commit(
+          'error',
+          `${this.cardTitle}: "${this.config.dataset}" x column "${this.config.x}" missing`
+        )
+        return
+      }
 
       // convert the data
       const convertedData: any = {}

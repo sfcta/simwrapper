@@ -1,12 +1,13 @@
 <template lang="pug">
 .content
     .tiles-container(v-if="imagesAreLoaded")
-      .tile(v-for="(value, index) in this.dataSet.data" v-bind:style="{ 'background-color': colors[index % colors.length]}")
-        p.tile-title {{ value[tileNameIndex] }}
-        p.tile-value {{ value[tileValueIndex] }}
-        .tile-image(v-if="value[tileImageIndex] != undefined && checkIfItIsACustomIcon(value[tileImageIndex])" :style="{'background': base64Images[index], 'background-size': 'contain'}")
-        img.tile-image(v-else-if="value[tileImageIndex] != undefined && checkIfIconIsInAssetsFolder(value[tileImageIndex])" v-bind:src="'/src/assets/tile-icons/' + value[tileImageIndex].trim() + '.svg'" :style="{'background': ''}")
-        font-awesome-icon.tile-image(v-else-if="value[tileImageIndex] != undefined" :icon="value[tileImageIndex].trim()" size="2xl" :style="{'background': '', 'color': 'black'}")
+      .tile(v-for="(value, index) in this.dataSet.data" v-bind:style="{ 'background-color': colors[index % colors.length]}" @click="")
+        a(:href="value[urlIndex]" target="_blank" :class="{ 'is-not-clickable': !value[urlIndex] }")
+          p.tile-title {{ value[tileNameIndex] }}
+          p.tile-value {{ value[tileValueIndex] }}
+          .tile-image(v-if="value[tileImageIndex] != undefined && checkIfItIsACustomIcon(value[tileImageIndex])" :style="{'background': base64Images[index], 'background-size': 'contain'}")
+          img.tile-image(v-else-if="value[tileImageIndex] != undefined && checkIfIconIsInAssetsFolder(value[tileImageIndex])" v-bind:src="'/src/assets/tile-icons/' + value[tileImageIndex].trim() + '.svg'" :style="{'background': ''}")
+          font-awesome-icon.tile-image(v-else-if="value[tileImageIndex] != undefined" :icon="value[tileImageIndex].trim()" size="2xl" :style="{'background': '', 'color': 'black'}")
 </template>
 
 <script lang="ts">
@@ -20,10 +21,11 @@ import { FileSystemConfig, Status } from '@/Globals'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
 import globalStore from '@/store'
 import { arrayBufferToBase64 } from '@/js/util'
+import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 
 export default defineComponent({
-  name: 'OverviewPanel',
-  components: {},
+  name: 'Tile',
+  components: { FontAwesomeIcon },
   props: {
     fileSystemConfig: { type: Object as PropType<FileSystemConfig>, required: true },
     subfolder: { type: String, required: true },
@@ -106,6 +108,7 @@ export default defineComponent({
       tileNameIndex: 0,
       tileValueIndex: 1,
       tileImageIndex: 2,
+      urlIndex: 3,
     }
   },
   computed: {
@@ -118,6 +121,8 @@ export default defineComponent({
     this.validateDataSet()
     await this.loadImages()
     this.$emit('isLoaded')
+    console.log(this.dataSet)
+    console.log(globalStore)
   },
   methods: {
     forceRerender() {
@@ -149,7 +154,7 @@ export default defineComponent({
               this.base64Images[i] = `center / cover no-repeat url(data:image/png;base64,${base64})`
           } catch (e) {
             if (e instanceof Response) {
-              this.$store.commit('setStatus', {
+              this.$emit('error', {
                 type: Status.WARNING,
                 msg: e.statusText,
                 desc: `The file ${value[this.tileImageIndex]} was not found in this path ${
@@ -181,7 +186,7 @@ export default defineComponent({
     validateYAML() {
       for (const key in this.YAMLrequirementsOverview) {
         if (key in this.config === false) {
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.ERROR,
             msg: `YAML file missing required key: ${key}`,
             desc: 'Check this.YAMLrequirementsXY for required keys',
@@ -289,6 +294,10 @@ export default defineComponent({
   height: 4rem;
   grid-row: 2;
   align-items: baseline;
+}
+
+.is-not-clickable {
+  cursor: default;
 }
 
 @media only screen and (max-width: 640px) {

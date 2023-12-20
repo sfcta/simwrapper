@@ -1,6 +1,6 @@
 <template lang="pug">
 .mycomponent(:class="{'is-thumbnail': thumbnail}")
-  b-input.searchbox(
+  b-input.xml-searchbox(
     type="search"
     icon-pack="fas"
     icon="search"
@@ -108,6 +108,9 @@ const MyComponent = defineComponent({
       this.fullXml = answer[1]
 
       this.viewXml = this.fullXml
+
+      // this.viewXml = this.recursiveDelete(this.viewXml)
+
       this.isLoaded = true
     } catch (err) {
       const e = err as any
@@ -228,6 +231,22 @@ const MyComponent = defineComponent({
       }
       return found
     },
+
+    // recursiveDelete(array: any[]) {
+    //   for (const [k, v] of Object.entries(array)) {
+    //     let data = v as any[]
+    //     if (data.length < 50) {
+    //     } else {
+    //       for (let i = 49; i < data.length; i++) {
+    //         data.splice(50, 1)
+    //       }
+    //     }
+    //     for (let i = 0; i < 50; i++) {
+    //       array = this.recursiveDelete(data)
+    //     }
+    //   }
+    //   return array
+    // },
   },
 })
 
@@ -243,7 +262,6 @@ export default MyComponent
   bottom: 0;
   left: 0;
   right: 0;
-  // margin: 1rem;
 }
 
 .mycomponent.is-thumbnail {
@@ -265,12 +283,15 @@ export default MyComponent
 }
 
 .things {
-  background-color: var(--bgBold);
   width: 100%;
   padding: 0.25rem 0;
 }
+</style>
 
-.searchbox {
-  padding: 1px 0px;
+<style lang="scss">
+.xml-searchbox input {
+  background-color: var(--bgBold);
+  border: 1px solid var(--bgCream3);
+  color: var(--text);
 }
 </style>

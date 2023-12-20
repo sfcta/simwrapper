@@ -184,7 +184,7 @@ export default defineComponent({
         else this.updateChartSimple()
       } catch (e) {
         const msg = '' + e
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.ERROR,
           msg,
           desc: 'Add a desription...',
@@ -208,6 +208,20 @@ export default defineComponent({
       const allRows = this.dataSet.allRows || ({} as any)
 
       if (Object.keys(allRows).length === 0) return
+
+      // check for valid columns
+      let status = true
+      const check = ['x', 'y', 'bubble']
+      for (const col of check) {
+        if (!allRows[this.config[col]]) {
+          this.$store.commit(
+            'error',
+            `${this.cardTitle}: "${this.config.dataset}" ${check} column "${col}" missing`
+          )
+          status = false
+        }
+      }
+      if (!status) return
 
       // bubble sizes
       let bubble = allRows[this.config.bubble].values.map((v: any) => v * factor)

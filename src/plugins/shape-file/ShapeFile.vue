@@ -303,6 +303,14 @@ const MyComponent = defineComponent({
       if (!REACT_VIEW_HANDLES[this.layerId]) return
       REACT_VIEW_HANDLES[this.layerId]()
     },
+
+    'globalState.colorScheme'() {
+      // change one element to force a deck.gl redraw
+      this.$nextTick().then(p => {
+        const tooltips = this.vizDetails.tooltip || []
+        this.vizDetails.tooltip = [...tooltips]
+      })
+    },
   },
 
   methods: {
@@ -647,7 +655,7 @@ const MyComponent = defineComponent({
       } catch (err) {
         const message = '' + err
         if (message.startsWith('YAMLSemantic')) {
-          this.$store.commit('error', `${filename}: ${message}`)
+          this.$emit('error', `${filename}: ${message}`)
         }
         console.log(`${filename} not found, trying config folders`)
       }
@@ -662,7 +670,7 @@ const MyComponent = defineComponent({
           console.error(`Also failed to load ${vizes[config]}`)
         }
       }
-      this.$store.commit('error', 'Could not load YAML: ' + filename)
+      this.$emit('error', 'Could not load YAML: ' + filename)
     },
 
     /**
@@ -723,7 +731,7 @@ const MyComponent = defineComponent({
 
         // console.log('DONE updating')
       } catch (e) {
-        this.$store.commit('error', '' + e)
+        this.$emit('error', '' + e)
       }
     },
 
@@ -801,7 +809,7 @@ const MyComponent = defineComponent({
       for (const tip of relevantTips) {
         // make sure tip column exists
         if (!dataTable[tip.column]) {
-          this.globalStore.commit('setStatus', {
+          this.$emit('error', {
             type: Status.WARNING,
             msg: `Tooltip references "${tip.id}" but that column doesn't exist`,
             desc: `Check the tooltip spec and column names`,
@@ -947,6 +955,7 @@ const MyComponent = defineComponent({
         // NORMALIZE if we need to
         let normalColumn
         let normalLookup
+
         if (color.normalize) {
           const [dataset, column] = color.normalize.split(':')
           if (!this.datasets[dataset] || !this.datasets[dataset][column]) {
@@ -961,7 +970,7 @@ const MyComponent = defineComponent({
               dataTable: this.datasets[dataset],
               dataJoinColumn: lookupColumn,
             })
-            normalLookup = this.datasets[dataset][`@@${column}`]
+            normalLookup = this.datasets[dataset][`@@${lookupColumn}`]
           }
         }
 
@@ -1151,7 +1160,7 @@ const MyComponent = defineComponent({
               dataTable: this.datasets[dataset],
               dataJoinColumn,
             })
-            normalLookup = this.datasets[dataset][`@@${column}`]
+            normalLookup = this.datasets[dataset][`@@${dataJoinColumn}`]
           }
         }
 
@@ -1289,7 +1298,7 @@ const MyComponent = defineComponent({
               dataTable: this.datasets[dataset],
               dataJoinColumn,
             })
-            normalLookup = this.datasets[dataset][`@@${column}`]
+            normalLookup = this.datasets[dataset][`@@${dataJoinColumn}`]
           }
         }
 
@@ -1750,7 +1759,7 @@ const MyComponent = defineComponent({
     //       this.boundaries.forEach(boundary => {
     //         // id can be in root of feature, or in properties
     //         let lookupKey = boundary.properties[joinShapesBy] || boundary[joinShapesBy]
-    //         if (!lookupKey) this.$store.commit('error', `Shape is missing property "${joinShapesBy}"`)
+    //         if (!lookupKey) this.$emit('error', `Shape is missing property "${joinShapesBy}"`)
 
     //         // the groupy thing doesn't auto-convert between strings and numbers
     //         let row = groupLookup.get(lookupKey)
@@ -1816,12 +1825,12 @@ const MyComponent = defineComponent({
         let hasPoints = false
 
         boundaries.forEach(b => {
-          // create a new properties object for each row
           const properties = b.properties ?? {}
           // geojson sometimes has "id" outside of properties:
           if ('id' in b) properties.id = b.id
+          // create a new properties object for each row;
           // push this new property object to the featureProperties array
-          featureProperties.push(properties)
+          featureProperties.push({ ...properties })
           // clear out actual feature properties; they are now in featureProperties instead
           b.properties = {}
 
@@ -1870,14 +1879,23 @@ const MyComponent = defineComponent({
           this.calculateAndMoveToCenter()
         }
 
+        // Need to wait one tick so Vue inserts the Deck.gl view AFTER center is calculated
+        // (not everyone lives in Berlin)
+        await this.$nextTick()
+
         // set features INSIDE react component
         if (REACT_VIEW_HANDLES[1000 + this.layerId]) {
           REACT_VIEW_HANDLES[1000 + this.layerId](this.boundaries)
         }
       } catch (e) {
-        console.error(e)
-        this.$store.commit('error', '' + e)
-        throw Error(`Could not load "${filename}"`)
+        const err = e as any
+        const message = err.statusText || 'Could not load'
+        const fullError = `${message}: "${filename}"`
+
+        this.statusText = ''
+        this.$emit('isLoaded')
+
+        throw Error(fullError)
       }
 
       if (!this.boundaries) throw Error(`No "features" found in shapes file`)
@@ -2016,7 +2034,7 @@ const MyComponent = defineComponent({
         geojson = await shapefile.read(shpBlob, dbfBlob)
       } catch (e) {
         console.error(e)
-        this.$store.commit('error', '' + e)
+        this.$emit('error', '' + e)
         return []
       }
 
@@ -2058,7 +2076,7 @@ const MyComponent = defineComponent({
         const msg = `Coordinates not lon/lat. Try providing ${prjFilename.substring(
           1 + prjFilename.lastIndexOf('/')
         )}`
-        this.$store.commit('error', msg)
+        this.$emit('error', msg)
         this.statusText = msg
         return []
       }
@@ -2151,7 +2169,7 @@ const MyComponent = defineComponent({
       } catch (e) {
         const msg = '' + e
         console.error(msg)
-        this.$store.commit('error', msg)
+        this.$emit('error', msg)
       }
       return []
     },
@@ -2304,7 +2322,7 @@ const MyComponent = defineComponent({
         if (lookupValue == undefined) lookupValue = boundary.properties[joinShapesBy]
 
         if (lookupValue === undefined) {
-          this.$store.commit('error', `Shape is missing property "${joinShapesBy}"`)
+          this.$emit('error', `Shape is missing property "${joinShapesBy}"`)
         }
 
         // SUM the values of the second elements of the zips from (1) above
@@ -2430,7 +2448,9 @@ const MyComponent = defineComponent({
       // Ask for shapes feature ID if it's not obvious/specified already
       this.featureJoinColumn = await this.figureOutFeatureIdColumn()
     } catch (e) {
-      this.$store.commit('error', 'Mapview ' + e)
+      this.$emit('error', '' + e)
+      this.statusText = ''
+      this.$emit('isLoaded')
     }
   },
 

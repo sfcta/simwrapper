@@ -2,6 +2,98 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [3.0.1](https://github.com/simwrapper/simwrapper/compare/v3.0.0...v3.0.1) (2023-12-18)
+
+
+### Bug Fixes
+
+* markdown panels are not scrollable ([8a7c9c3](https://github.com/simwrapper/simwrapper/commit/8a7c9c368d52dc85f83d1af240a9b0ece4422d2d))
+
+## [3.0.0](https://github.com/simwrapper/simwrapper/compare/v2.5.4...v3.0.0) (2023-12-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* Project sites which use custom.css, header.md, and
+footer.md should review their dashboards to ensure they still fit with
+the new layout and UI design. In many cases, custom.css is now
+completely unnecessary, as styling can now be included in
+simwrapper-config.yaml
+
+Merge branch 'staging'
+
+### Features
+
+* Dashboard subtabs ([b02322e](https://github.com/simwrapper/simwrapper/commit/b02322e3a6255fdc29594f06bd14d41d5cd37e2a))
+* Improved file navigation with breadcrumbs, and better dashboard layout ([2fbf085](https://github.com/simwrapper/simwrapper/commit/2fbf0854d6df62acc690bd4cfc973ac807fdcf2c))
+* New "grid map" visualization for point-data ([65e5f7d](https://github.com/simwrapper/simwrapper/commit/65e5f7d472a5c3a3e8ec59669d69a0d34b937335))
+* Pinned favorite folders ([c015ef3](https://github.com/simwrapper/simwrapper/commit/c015ef31ba6cd3422cd189e942c38e52d7886742))
+* Project site left-side navigation and dashboard layout improvements ([14f528d](https://github.com/simwrapper/simwrapper/commit/14f528d19f5f2752fbf0c4aee6b987748802e146))
+* Subtabs YAML update for dashboard sections with subtabs ([1dda4b3](https://github.com/simwrapper/simwrapper/commit/1dda4b3a676d1917818bfb8230b077b1598a7acb))
+* Top navigation bar for project pages via simwrapper-config.yaml ([dd51785](https://github.com/simwrapper/simwrapper/commit/dd517859dbf076ad131de46561acb3cff3a2cfec))
+* Updated UI, cleaner dashboard looks, new project site features ([6e71517](https://github.com/simwrapper/simwrapper/commit/6e71517b4f13d8fbfa93edb5a8d26a4f9654a479))
+
+
+### Bug Fixes
+
+* **map:** Map doesn't consistently switch themes ([ccc09c7](https://github.com/simwrapper/simwrapper/commit/ccc09c7557510c18346ba5d55cd8938278224bb7)), closes [#284](https://github.com/simwrapper/simwrapper/issues/284)
+* **text:** Text/Markdown panels could be the wrong size ([ce44e1b](https://github.com/simwrapper/simwrapper/commit/ce44e1be8bbf8702f5b16e2c47b11b2d2340ca97))
+
+### [2.5.4](https://github.com/simwrapper/simwrapper/compare/v2.5.3...v2.5.4) (2023-11-17)
+
+
+### Bug Fixes
+
+* Better error messages when basic chart configs are missing columns ([9e97d1e](https://github.com/simwrapper/simwrapper/commit/9e97d1e7f78fda189e6bdc523900dcdd624d3878))
+* **csv:** CSV tables were expanding outside their bounds ([e61b751](https://github.com/simwrapper/simwrapper/commit/e61b75198257c49f5ea810d9cef75c7e798403ee))
+* **map:** shapefile infinite wait on missing geojson file ([b5b3ffa](https://github.com/simwrapper/simwrapper/commit/b5b3ffa0ede26df107234a4f589409964a5a1b50))
+
+### [2.5.3](https://github.com/simwrapper/simwrapper/compare/v2.5.2...v2.5.3) (2023-11-09)
+
+
+### Bug Fixes
+
+* Plotly diagram y-axis title sometimes missing ([44bbeb2](https://github.com/simwrapper/simwrapper/commit/44bbeb2458b1f545f24c59b94c51d99c13b8abef)), closes [#301](https://github.com/simwrapper/simwrapper/issues/301)
+
+### [2.5.2](https://github.com/simwrapper/simwrapper/compare/v2.5.1...v2.5.2) (2023-11-02)
+
+
+### Bug Fixes
+
+* Atlantis "non" coordinate system better handled now ([b2ae688](https://github.com/simwrapper/simwrapper/commit/b2ae6886640eee80b1c09acc5ec2c76230f6a98c))
+* **links:** very old MATSim networks were not loading properly ([0eeb24c](https://github.com/simwrapper/simwrapper/commit/0eeb24cc621eaef8dc423943f2d20441c4851433))
+* normalized data calculation out of alignment ([802bbd9](https://github.com/simwrapper/simwrapper/commit/802bbd9c57375ca709940a52ff815da1d771e690)), closes [#281](https://github.com/simwrapper/simwrapper/issues/281)
+* user-supplied bad/wrong url -> better error message ([023480a](https://github.com/simwrapper/simwrapper/commit/023480ab66958898ea4141923be040ce3fde3c9c)), closes [#259](https://github.com/simwrapper/simwrapper/issues/259)
+
+### [2.5.1](https://github.com/simwrapper/simwrapper/compare/v2.5.0...v2.5.1) (2023-08-29)
+
+
+### Bug Fixes
+
+* **carriers:** Preprocessed network files not loading ([890d453](https://github.com/simwrapper/simwrapper/commit/890d4536eb017ff47e0b14e6dca79080b84d509b)), closes [#288](https://github.com/simwrapper/simwrapper/issues/288)
+* **carriers:** Show simple tours if there is no route  ([3e22128](https://github.com/simwrapper/simwrapper/commit/3e22128b7c7d0db1ee0a0fb65be722d73e0f336f)), closes [#290](https://github.com/simwrapper/simwrapper/issues/290)
+* **links:** some networks with Atlantis coord system not loading after EPSG prompt ([9e9e4a7](https://github.com/simwrapper/simwrapper/commit/9e9e4a77c3bafff8add4204b8313f6e5c36a8a9d))
+* **plotly:** y-axis on plots with two y-axes not aligned ([54a349b](https://github.com/simwrapper/simwrapper/commit/54a349b6eb33805672a11e1ff75ea87a3373fa5a)), closes [#291](https://github.com/simwrapper/simwrapper/issues/291)
+* **veh-animation:** Vehicle icons not loading from all base URLs ([86b6287](https://github.com/simwrapper/simwrapper/commit/86b6287bc05da2d8af3719ecede65143fd0b533c))
+* **xy-hexagons:** Hexagon map sometimes ignores user-supplied center ([1b7d16f](https://github.com/simwrapper/simwrapper/commit/1b7d16f8bc56e01c27671084f30a8eb67e3f7183))
+
+## [2.5.0](https://github.com/simwrapper/simwrapper/compare/v2.4.0...v2.5.0) (2023-08-22)
+
+
+### Features
+
+* **xyt:** added UI dialog for custom breakpoints ([#285](https://github.com/simwrapper/simwrapper/issues/285)) ([4bd6b2a](https://github.com/simwrapper/simwrapper/commit/4bd6b2a8935f8a9c6e801a26e2ee21c58c9840c7))
+
+
+### Bug Fixes
+
+* better error messages in vega-chart plugin ([b4de7da](https://github.com/simwrapper/simwrapper/commit/b4de7daed4335034433613f11c8f91dcd3982c9e))
+* **carriers:** Carrier viewer not loading some large networks ([784b8c5](https://github.com/simwrapper/simwrapper/commit/784b8c54a9ee7d9f815f8a613686fae88abdd0e6))
+* **hexagons:** blank CSVs crash the map ([85254e5](https://github.com/simwrapper/simwrapper/commit/85254e54741e4e134446e8910596629221cc5639)), closes [#286](https://github.com/simwrapper/simwrapper/issues/286)
+* Plotly slider bug (Issue [#282](https://github.com/simwrapper/simwrapper/issues/282)) ([#283](https://github.com/simwrapper/simwrapper/issues/283)) ([52d942c](https://github.com/simwrapper/simwrapper/commit/52d942c39bb1316a6c2329fb1f509804a5565e4f))
+* Startup time improvement through lazy loading of viz plugins ([8c3be04](https://github.com/simwrapper/simwrapper/commit/8c3be043b47d13a1e61f83dfd6e045cdfcf15b44))
+* **xyt:** X-Y-T plot can specify manual breakpoints instead of buckets,exponent ([43a08f0](https://github.com/simwrapper/simwrapper/commit/43a08f0bca7ec6c029afd99f6118472945ea00d8))
+
 ## [2.4.0](https://github.com/simwrapper/simwrapper/compare/v2.3.0...v2.4.0) (2023-06-09)
 
 

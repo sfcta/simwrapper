@@ -34,16 +34,6 @@ function convertSecondsToClockTimeMinutes(index: number) {
   }
 }
 
-const INITIAL_VIEW = {
-  pitch: 0,
-  zoom: 8,
-  bearing: 0,
-  longitude: 14,
-  latitude: 52.0,
-  // longitude: 14.38,
-  // latitude: 51.7,
-}
-
 // -------------------------------------------------------------------
 export default function Component({
   viewId = 0,
@@ -60,9 +50,10 @@ export default function Component({
   radius = 5,
   mapIsIndependent = false,
   simulationTime = 20000,
+  projection = '',
 }) {
   // manage SimWrapper centralized viewState - for linked maps
-  const [viewState, setViewState] = useState(INITIAL_VIEW)
+  const [viewState, setViewState] = useState(globalStore.state.viewState)
 
   REACT_VIEW_HANDLES[viewId] = () => {
     setViewState(globalStore.state.viewState)
@@ -204,7 +195,8 @@ export default function Component({
 
   const allLayers = [...pointLayers, ...vehicleLayers]
 
-  // initialViewState={initialViewState}
+  const showBackgroundMap = projection && projection !== 'Atlantis'
+
   return (
     <DeckGL
       layers={allLayers}
@@ -216,7 +208,7 @@ export default function Component({
       onClick={getTooltip}
       getTooltip={getTooltip}
     >
-      {
+      {showBackgroundMap && (
         /*
         // @ts-ignore */
         <StaticMap
@@ -224,7 +216,7 @@ export default function Component({
           preventStyleDiffing={true}
           mapboxApiAccessToken={MAPBOX_TOKEN}
         />
-      }
+      )}
     </DeckGL>
   )
 }

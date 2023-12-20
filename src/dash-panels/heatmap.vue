@@ -190,11 +190,9 @@ export default defineComponent({
     },
 
     validateYAML() {
-      console.log('in heatmap validation')
-
       for (const key in this.YAMLrequirementsHeatmap) {
         if (key in this.config === false) {
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.ERROR,
             msg: `YAML file missing required key: ${key}`,
             desc: 'Check this.YAMLrequirementsXY for required keys',
@@ -212,7 +210,7 @@ export default defineComponent({
         else this.updateChartSimple()
       } catch (e) {
         const msg = '' + e
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.ERROR,
           msg,
           desc: 'Add a desription...',
@@ -232,6 +230,20 @@ export default defineComponent({
 
       const columns = this.config.columns || this.config.usedCol || []
       if (!columns.length) return
+
+      // check for valid columns
+      let status = true
+      const check = ['y']
+      for (const col of check) {
+        if (!allRows[this.config[col]]) {
+          this.$store.commit(
+            'error',
+            `${this.cardTitle}: "${this.config.dataset}" ${check} column "${col}" missing`
+          )
+          status = false
+        }
+      }
+      if (!status) return
 
       // Reads all the data of the y-axis.
       let yaxis = allRows[this.config.y].values
@@ -270,7 +282,7 @@ export default defineComponent({
       // warnings
       // missing title
       if (plotTitle.length == 0) {
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.WARNING,
           msg: `The plot title is missing!`,
           desc: "Please add a plot title in the .yaml-file (title: 'Example title')",

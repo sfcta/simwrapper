@@ -95,22 +95,19 @@ const i18n = {
 import { defineComponent } from 'vue'
 import type { PropType } from 'vue'
 
-import VueSlider from 'vue-slider-component'
 import { ToggleButton } from 'vue-js-toggle-button'
 import readBlob from 'read-blob'
 import YAML from 'yaml'
 import crossfilter from 'crossfilter2'
 import { blobToArrayBuffer, blobToBinaryString } from 'blob-util'
-import * as coroutines from 'js-coroutines'
 
 import globalStore from '@/store'
-import pako from '@aftersim/pako'
 import CollapsiblePanel from '@/components/CollapsiblePanel.vue'
 import LegendColors from './LegendColors'
 import PlaybackControls from '@/components/PlaybackControls.vue'
 import SettingsPanel from './SettingsPanel.vue'
 import ZoomButtons from '@/components/ZoomButtons.vue'
-import { arrayBufferToBase64 } from '@/js/util'
+import { arrayBufferToBase64, gUnzip } from '@/js/util'
 
 import {
   ColorScheme,
@@ -135,7 +132,6 @@ const MyComponent = defineComponent({
     SettingsPanel,
     LegendColors,
     TripViz,
-    VueSlider,
     PlaybackControls,
     ToggleButton,
     ZoomButtons,
@@ -219,7 +215,7 @@ const MyComponent = defineComponent({
       requestEnd: {} as crossfilter.Dimension<any, any>,
       requestVehicle: {} as crossfilter.Dimension<any, any>,
 
-      simulationTime: 6 * 3600, // 8 * 3600 + 10 * 60 + 10
+      simulationTime: 5 * 3600, // 8 * 3600 + 10 * 60 + 10
 
       timeElapsedSinceLastFrame: 0,
 
@@ -231,10 +227,11 @@ const MyComponent = defineComponent({
       isLoaded: true,
       showHelp: false,
 
-      speedStops: [-10, -5, -2, -1, -0.5, -0.25, 0, 0.25, 0.5, 1, 2, 5, 10],
-      speed: 1,
+      speedStops: [-20, -10, -5, -2, -1, -0.5, -0.25, 0, 0.25, 0.5, 1, 2, 5, 10, 20],
+      speed: 10,
 
       legendBits: [] as any[],
+      isEmbedded: false,
       thumbnailUrl: "url('assets/thumbnail.jpg') no-repeat;",
 
       vehicleLookup: [] as string[],
@@ -367,7 +364,7 @@ const MyComponent = defineComponent({
           longitude: this.vizDetails.center[0],
           latitude: this.vizDetails.center[1],
           zoom: this.vizDetails.zoom || 10,
-          pitch: 10,
+          pitch: 20,
           bearing: 0,
         })
       }
@@ -484,7 +481,7 @@ const MyComponent = defineComponent({
       const allTrips: any[] = []
       let vehNumber = -1
 
-      await coroutines.forEachAsync(trips, (trip: any) => {
+      for (const trip of trips) {
         const path = trip.path
         const timestamps = trip.timestamps
         const passengers = trip.passengers
@@ -495,17 +492,30 @@ const MyComponent = defineComponent({
         this.vehicleLookupString[trip.id] = vehNumber
 
         for (let i = 0; i < trip.path.length - 1; i++) {
-          allTrips.push({
+          const trip = {
             t0: timestamps[i],
             t1: timestamps[i + 1],
             p0: path[i],
             p1: path[i + 1],
             v: vehNumber,
             occ: passengers[i],
-          })
+          }
+          // grey out vehicles that aren't moving
+          if (trip.p0[0] == trip.p1[0] && trip.p0[1] == trip.p1[1]) trip.occ = 0
+
+          allTrips.push(trip)
         }
-      })
+      }
       return crossfilter(allTrips)
+    },
+
+    setEmbeddedMode() {
+      if ('embed' in this.$route.query) {
+        console.log('EMBEDDED MODE')
+        this.isEmbedded = true
+        this.$store.commit('setShowLeftBar', false)
+        this.$store.commit('setFullWidth', true)
+      }
     },
 
     updateDatasetFilters() {
@@ -576,7 +586,7 @@ const MyComponent = defineComponent({
 
       const traces: any = []
 
-      await coroutines.forEachAsync(trips, (vehicle: any) => {
+      for (const vehicle of trips) {
         vehNumber++
 
         let time = vehicle.timestamps[0]
@@ -616,7 +626,7 @@ const MyComponent = defineComponent({
           segment.t1 = nextTime
         })
         traces.push(...segments)
-      })
+      }
 
       return crossfilter(traces)
     },
@@ -636,10 +646,11 @@ const MyComponent = defineComponent({
           const blob = await this.fileApi.getFileBlob(
             this.myState.subfolder + '/' + this.vizDetails.drtTrips
           )
-          const blobString = blob ? await blobToBinaryString(blob) : null
-          let text = await coroutines.run(pako.inflateAsync(blobString, { to: 'string' }))
+          const buffer = await blob.arrayBuffer()
+          // recursively gunzip until it can gunzip no more:
+          const unzipped = gUnzip(buffer)
+          const text = new TextDecoder('utf-8').decode(unzipped)
           const json = JSON.parse(text)
-
           trips = json.trips
           drtRequests = json.drtRequests
         }
@@ -669,6 +680,9 @@ const MyComponent = defineComponent({
     this.myState.thumbnail = this.thumbnail
     this.myState.yamlConfig = this.yamlConfig ?? ''
     this.myState.subfolder = this.subfolder
+
+    // EMBED MODE?
+    this.setEmbeddedMode()
 
     await this.getVizDetails()
 
@@ -726,7 +740,6 @@ export default MyComponent
 </script>
 
 <style scoped lang="scss">
-@import '~/vue-slider-component/theme/default.css';
 @import '@/styles.scss';
 
 .gl-app {

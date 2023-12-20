@@ -185,13 +185,8 @@ export default class DashboardDataManager {
           thread.onmessage = e => {
             thread.terminate()
             if (e.data.error) {
-              console.log(e.data.error)
-              globalStore.commit('setStatus', {
-                type: Status.ERROR,
-                msg: `Problem loading properties in ${fullpath}`,
-                desc: 'File loaded from storage, but properties table could not be parsed',
-              })
-              reject()
+              console.error(e.data.error)
+              reject(`Problem loading properties in ${fullpath}`)
             }
             resolve(e.data)
           }
@@ -383,7 +378,7 @@ export default class DashboardDataManager {
     for (const [column, spec] of Object.entries(metaData.activeFilters)) {
       const dataColumn = dataset[column]
       if (spec.values[0] === undefined || spec.values[0] === '') {
-        globalStore.commit('error', datasetId + ': filter error')
+        throw Error(datasetId + ': filter error')
       }
 
       // prep LT/GT
@@ -508,12 +503,7 @@ export default class DashboardDataManager {
 
             if (config?.dataset && msg.indexOf(config.dataset) === -1) msg += `: ${config.dataset}`
 
-            globalStore.commit('setStatus', {
-              type: Status.ERROR,
-              msg,
-              desc: JSON.stringify(config),
-            })
-            reject()
+            reject(msg)
           }
           resolve(e.data)
         }
@@ -542,11 +532,15 @@ export default class DashboardDataManager {
         path.indexOf('/') > -1 ? path.substring(0, path.lastIndexOf('/')) : this.subfolder
 
       // get file path search pattern
-      const { files } = await new HTTPFileSystem(this.fileApi).getDirectory(folder)
-      let pattern = path.indexOf('/') === -1 ? path : path.substring(path.lastIndexOf('/') + 1)
-      const match = findMatchingGlobInFiles(files, pattern)
-
-      if (match.length !== 1) reject('File not found: ' + path)
+      try {
+        const { files } = await new HTTPFileSystem(this.fileApi).getDirectory(folder)
+        let pattern = path.indexOf('/') === -1 ? path : path.substring(path.lastIndexOf('/') + 1)
+        const match = findMatchingGlobInFiles(files, pattern)
+        if (match.length !== 1) reject('File not found: ' + path)
+      } catch (e) {
+        // Could not get directory listing!
+        reject('Error reading folder: ' + folder)
+      }
 
       const thread = new RoadNetworkLoader() as any
       try {
@@ -554,7 +548,9 @@ export default class DashboardDataManager {
           // perhaps network has no CRS and we need to ask user
           if (e.data.promptUserForCRS) {
             let crs =
-              prompt('Enter the coordinate reference system, e.g. EPSG:25832') || 'EPSG:31468'
+              prompt(
+                'Enter the projection coordinate reference system, e.g. "EPSG:25832", or cancel if unknown'
+              ) || 'Atlantis'
             if (Number.isInteger(parseInt(crs))) crs = `EPSG:${crs}`
 
             thread.postMessage({ crs })
@@ -597,7 +593,8 @@ export default class DashboardDataManager {
       (a: FileSystemConfig) => a.slug === name
     )
     if (svnProject.length === 0) {
-      console.error('DDM: no such project')
+      // console.log(globalStore.state.svnProjects)
+      console.error(`DDM: no such project, is slug correct? (${name})`)
       throw Error
     }
     return svnProject[0]

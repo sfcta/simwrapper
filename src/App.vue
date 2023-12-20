@@ -10,12 +10,6 @@
     p Grant access to local files to view this content:
     button.button.is-small(@click="grantAccess") Grant access
 
-  //.message-zone(v-if="state.statusErrors.length")
-    .message-error(v-for="err,i in state.statusErrors")
-      p: i.fa.fa-icon.fa-exclamation-triangle(style="color: orange;")
-      p(v-html="err")
-    button.button.is-small(@click="removeAllErrors()") CLEAR
-
 </template>
 
 <script lang="ts">
@@ -36,11 +30,11 @@ const i18n = {
 
 import { defineComponent } from 'vue'
 import maplibregl from 'maplibre-gl'
-import { get, set, clear } from 'idb-keyval'
+import { get } from 'idb-keyval'
 
 import globalStore from '@/store'
 import { ColorScheme, MAPBOX_TOKEN, MAP_STYLES_OFFLINE } from '@/Globals'
-import fileSystems, { addLocalFilesystem } from '@/fileSystemConfig'
+import { addLocalFilesystem } from '@/fileSystemConfig'
 
 import LoginPanel from '@/components/LoginPanel.vue'
 
@@ -95,6 +89,7 @@ export default defineComponent({
       if (event.altKey && event.shiftKey && event.keyCode === 81) {
         console.log('QUICKVIEW')
         this.$store.commit('toggleShowLeftBar')
+        this.$store.commit('setShowLeftStrip', true)
         this.$store.commit('resize')
       }
       // shift-alt-W: wide screen mode
@@ -177,7 +172,8 @@ export default defineComponent({
       : ColorScheme.LightMode
 
     if (theme === ColorScheme.LightMode) this.$store.commit('rotateColors')
-    document.body.style.backgroundColor = theme === ColorScheme.LightMode ? '#edebe4' : '#2d3133'
+
+    // document.body.style.backgroundColor = theme === ColorScheme.LightMode ? '#edebe4' : '#2d3133'
 
     this.toggleFullScreen(true)
     this.setOnlineOrOfflineMode()
@@ -203,7 +199,6 @@ export default defineComponent({
 @import '~/the-new-css-reset/css/reset.css';
 @import '~/lil-gui/dist/lil-gui.min.css';
 @import '~/maplibre-gl/dist/maplibre-gl.css';
-@import '~/vue-slider-component/theme/default.css';
 @import '~/buefy/dist/buefy.css';
 
 @import '@/styles.scss';
@@ -221,10 +216,7 @@ html {
 body,
 html {
   font-family: $mainFont;
-  // margin: 0px 0px;
-  // padding: 0px 0px;
   height: 100%;
-  // border: 0px;
   overscroll-behavior: contain;
 }
 
@@ -234,8 +226,6 @@ h3,
 h4,
 h5,
 h6 {
-  // margin: 0 0;
-  // padding: 0 0;
   font-family: $fancyFont;
 }
 
@@ -346,7 +336,7 @@ h4 {
 #main-app {
   display: grid;
   color: var(--text);
-  background-color: var(--bgPanel2);
+  // background-color: yellow; // var(--bgPanel2);
   grid-template-columns: 1fr;
   grid-template-rows: auto auto 1fr;
   margin: 0 0;
@@ -394,10 +384,6 @@ a:hover {
 
 .space {
   margin: 0 1rem;
-}
-
-.vue-slider-rail {
-  background-color: green;
 }
 
 .center-area {
@@ -643,7 +629,7 @@ p.splash-label {
 
 /* Track */
 ::-webkit-scrollbar-track {
-  background: #00000000;
+  background: #00000080;
 }
 
 /* Handle */
@@ -653,7 +639,7 @@ p.splash-label {
 
 /* Handle on hover */
 ::-webkit-scrollbar-thumb:hover {
-  background: #888888aa;
+  background: #ffffff40;
 }
 
 .deck-tooltip {

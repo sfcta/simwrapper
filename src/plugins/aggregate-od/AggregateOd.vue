@@ -81,7 +81,6 @@ import maplibregl, { MapMouseEvent, PositionOptions } from 'maplibre-gl'
 import nprogress from 'nprogress'
 import proj4 from 'proj4'
 import readBlob from 'read-blob'
-import VueSlider from 'vue-slider-component'
 import YAML from 'yaml'
 
 import { findMatchingGlobInFiles } from '@/js/util'
@@ -138,7 +137,6 @@ const Component = defineComponent({
     ScaleSlider,
     TimeSlider,
     ZoomButtons,
-    VueSlider,
   },
   props: {
     root: { type: String, required: true },
@@ -360,7 +358,7 @@ const Component = defineComponent({
 
       for (const key in this.YAMLrequirementsOD) {
         if (key in configuration === false) {
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.ERROR,
             msg: `${this.yamlConfig}: missing required key: ${key}`,
             desc: '',
@@ -419,7 +417,7 @@ const Component = defineComponent({
 
         console.error(msg)
         this.loadingText = '' + e
-        this.$store.commit('error', msg)
+        this.$emit('error', msg)
         return null
       }
     },
@@ -945,7 +943,7 @@ const Component = defineComponent({
         if (!this.idColumn && properties) this.idColumn = Object.keys(properties)[0]
 
         if (!(this.idColumn in properties)) {
-          this.$store.commit('error', `Shapefile does not contain ID column "${this.idColumn}"`)
+          this.$emit('error', `Shapefile does not contain ID column "${this.idColumn}"`)
           return
         }
 
@@ -1071,7 +1069,7 @@ const Component = defineComponent({
         } else if (message.error) {
           this.csvWorker?.terminate()
           this.loadingText = message.error
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.ERROR,
             msg: `Aggr.OD: Error loading "${this.myState.subfolder}/${this.vizDetails.csvFile}"`,
             desc: `Check the path and filename`,

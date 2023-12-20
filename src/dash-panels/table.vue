@@ -1,5 +1,5 @@
 <template lang="pug">
-vue-good-table(
+vue-good-table.plugin-panel(
       :class="[globalState.isDarkMode ? 'darktable' : 'lighttable', hideHeader ? 'hide-header' : '', this.config.style == 'topsheet' ? 'topsheet-style' : '']"
       :columns="columns"
       :rows="rows"
@@ -48,7 +48,7 @@ export default defineComponent({
       },
       dataColumnNames: ['date'],
       percentColumnNames: ['percent'],
-      hideHeader: false,
+      hideHeader: undefined as any,
       isFullsize: false,
     }
   },
@@ -115,11 +115,9 @@ export default defineComponent({
     },
 
     validateYAML() {
-      console.log('in line validation')
-
       for (const key in this.YAMLrequirementsLine) {
         if (key in this.config === false) {
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.ERROR,
             msg: `tablev2: missing required key: ${key}`,
             desc: JSON.stringify(this.config),
@@ -129,7 +127,7 @@ export default defineComponent({
 
       for (const deprecated of this.YAMLdeprecations) {
         if (this.config[deprecated]) {
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.WARNING,
             msg: `tablev2: deprecated field: ${deprecated}`,
             desc: JSON.stringify(this.config),
@@ -163,7 +161,9 @@ export default defineComponent({
       this.columns = []
       this.rows = []
 
-      if (this.config.style == 'topsheet') this.hideHeader = true
+      // if (this.config.style == 'topsheet' && this.hideHeader == undefined) {
+      //   this.hideHeader = true
+      // }
 
       // Create columns array for the header
       Object.entries(this.dataSet.allRows).forEach(([key, value]) => {
@@ -275,15 +275,16 @@ export default defineComponent({
         }
       }
 
-      // Show/Hide header
-      if (!this.config.hideHeader) {
-        this.hideHeader = false
-      }
-
       // Add settings for topsheet style
       if (this.config.style == 'topsheet') {
         this.hideHeader = true
         this.isFullsize = true
+      }
+
+      // Overwrite templates
+      // Show/Hide header
+      if (this.config.hideHeader != undefined) {
+        this.hideHeader = this.config.hideHeader
       }
 
       if (
@@ -465,6 +466,14 @@ export default defineComponent({
 
 <style scoped lang="scss">
 @import '@/styles.scss';
+.plugin-panel {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  overflow: auto;
+}
 
 @media only screen and (max-width: 640px) {
 }

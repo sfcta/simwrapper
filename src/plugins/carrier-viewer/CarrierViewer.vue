@@ -16,7 +16,9 @@
                   :viewId="linkLayerId"
                   :settings="vizSettings"
                   :numSelectedTours="selectedTours.length"
-                  :onClick="handleClick")
+                  :onClick="handleClick"
+                  :projection="vizDetails.projection"
+                  )
       ZoomButtons(v-if="!thumbnail")
       .xmessage(v-if="myState.statusMessage") {{ myState.statusMessage }}
 
@@ -65,7 +67,9 @@
             span {{ $t('tours')}}: {{ tours.length}}
             .leaf.tour(v-for="tour,i in tours" :key="`${i}-${tour.$id}`"
                 @click="handleSelectTour(tour)"
-                :class="{selected: selectedTours.includes(tour)}") {{ `${tour.vehicleId}` }}
+                :class="{selected: selectedTours.includes(tour)}")
+                div(v-if="tour.tourId") {{ tour.tourId }}: {{ `${tour.vehicleId}` }}
+                div(v-else) {{ `${tour.vehicleId}` }}
 
         .vehicles(v-if="activeTab=='vehicles'")
             span {{ $t('vehicles')}}: {{ vehicles.length}}
@@ -123,15 +127,12 @@ import readBlob from 'read-blob'
 import YAML from 'yaml'
 import naturalSort from 'javascript-natural-sort'
 import colorMap from 'colormap'
-import pako from '@aftersim/pako'
-import { blobToArrayBuffer, blobToBinaryString } from 'blob-util'
-import * as coroutines from 'js-coroutines'
 
 import globalStore from '@/store'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
 import LegendColors from '@/components/LegendColors'
 import ZoomButtons from '@/components/ZoomButtons.vue'
-import { parseXML, findMatchingGlobInFiles, arrayBufferToBase64 } from '@/js/util'
+import { gUnzip, parseXML, findMatchingGlobInFiles, arrayBufferToBase64 } from '@/js/util'
 
 import RoadNetworkLoader from '@/workers/RoadNetworkLoader.worker.ts?worker'
 
@@ -345,7 +346,7 @@ const CarrierPlugin = defineComponent({
 
   methods: {
     handleSelectShipment(shipment: any) {
-      console.log({ shipment })
+      // console.log({ shipment })
 
       if (this.selectedShipment === shipment) {
         this.selectedShipment = null
@@ -519,6 +520,22 @@ const CarrierPlugin = defineComponent({
     },
 
     async handleSelectTour(tour: any) {
+      // add the legs from the shipmentLookup if the tour has no route data
+      if (!tour.legs.length) {
+        console.log('No Route.')
+        for (let i = 0; i < tour.plan.length; i++) {
+          if (tour.plan[i].$shipmentId) {
+            const shipmentId = tour.plan[i].$shipmentId
+            const linksArray = [
+              this.shipmentLookup[shipmentId].$from,
+              this.shipmentLookup[shipmentId].$to,
+            ]
+            tour.legs.push({ links: linksArray })
+          }
+        }
+        this.vizSettings.simplifyTours = true
+      }
+
       //this unselects tour if user clicks an already-selected tour again
       if (this.selectedTours.includes(tour)) {
         this.selectedTours = this.selectedTours.filter((element: any) => element !== tour)
@@ -709,6 +726,7 @@ const CarrierPlugin = defineComponent({
 
         const p = {
           vehicleId: tour.$vehicleId,
+          tourId: tour.$tourId,
           plan,
           legs, // legs.links, legs.shipmentsOnBoard, legs.totalSize
           tourNumber: 0,
@@ -895,7 +913,7 @@ const CarrierPlugin = defineComponent({
 
     clickedDepot(object: any) {
       const vehiclesAtThisDepot = Object.values(object.vehicles).map((v: any) => v.$id)
-      console.log({ vehiclesAtThisDepot })
+      // console.log({ vehiclesAtThisDepot })
       this.selectedTours = []
       this.shownShipments = []
 
@@ -940,6 +958,8 @@ const CarrierPlugin = defineComponent({
 
       // sort by '$id' attribute
       const carrierList = root.carriers.carrier.sort((a: any, b: any) => naturalSort(a.$id, b.$id))
+      // console.log(carrierList)
+
       return carrierList
     },
 
@@ -951,10 +971,7 @@ const CarrierPlugin = defineComponent({
         const path = `${this.myState.subfolder}/${this.vizDetails.network}`
         const net = await this.fetchNetwork(path, {})
 
-        // Handle Atlantis: no long/lat coordinates
-        if (net.projection == 'Atlantis') {
-          this.$store.commit('setMapStyles', MAP_STYLES_OFFLINE)
-        }
+        this.vizDetails.projection = '' + net.projection
 
         // build direct lookup of x/y from link-id
         this.myState.statusMessage = 'Building network link table'
@@ -970,15 +987,15 @@ const CarrierPlugin = defineComponent({
         })
         return links
       } else {
-        // pre-converted output from create_network.py
-        const blob = await this.fileApi.getFileBlob(
+        // pre-converted JSON output from create_network.py
+        const jsonNetwork = await this.fileApi.getFileJson(
           this.myState.subfolder + '/' + this.vizDetails.network
         )
-        const blobString = blob ? await blobToBinaryString(blob) : null
-        let text = await coroutines.run(pako.inflateAsync(blobString, { to: 'string' }))
-        const convertedNetwork = JSON.parse(text)
 
-        return convertedNetwork
+        // geojson is ALWAYS in long/lat
+        this.vizDetails.projection = 'EPSG:4326'
+
+        return jsonNetwork
       }
     },
 
@@ -997,9 +1014,15 @@ const CarrierPlugin = defineComponent({
             if (e.data.promptUserForCRS) {
               let crs =
                 prompt('Enter the coordinate reference system, e.g. EPSG:25832') || 'EPSG:31468'
-              if (!isNaN(parseInt(crs))) crs = `EPSG:${crs}`
+
+              if (Number.isFinite(parseInt(crs))) crs = `EPSG:${crs}`
 
               thread.postMessage({ crs })
+              return
+            }
+
+            if (e.data.status) {
+              this.myState.statusMessage = '' + e.data.status
               return
             }
 
@@ -1009,6 +1032,7 @@ const CarrierPlugin = defineComponent({
             if (e.data.error) {
               console.error(e.data.error)
               globalStore.commit('error', e.data.error)
+              this.myState.statusMessage = e.data.error
               reject(e.data.error)
             }
             resolve(e.data.links)
@@ -1052,21 +1076,22 @@ const CarrierPlugin = defineComponent({
 
         let content = ''
 
-        if (filepath.endsWith('xml')) {
-          content = await this.fileApi.getFileText(filepath)
-        } else if (filepath.endsWith('gz')) {
+        if (filepath.endsWith('xml') || filepath.endsWith('gz')) {
           const blob = await this.fileApi.getFileBlob(filepath)
-          const blobString = blob ? await blobToBinaryString(blob) : null
-          content = await coroutines.run(pako.inflateAsync(blobString, { to: 'string' }))
+          const buffer = await blob.arrayBuffer()
+          // recursively gunzip until it can gunzip no more:
+          const unzipped = gUnzip(buffer)
+          const text = new TextDecoder('utf-8').decode(unzipped)
+          return text
         }
-        return content
       } catch (e) {
-        globalStore.commit('error', '' + e)
-        const error = filepath + ': ' + e
-        console.error(e)
-        this.myState.statusMessage = error
-        return ''
+        // oh no
       }
+
+      const error = `Error loading ${filepath}`
+      globalStore.commit('error', error)
+      this.myState.statusMessage = error
+      return ''
     },
 
     selectDropdown() {
@@ -1117,6 +1142,9 @@ const CarrierPlugin = defineComponent({
 
     // Select the first carrier if the carriers are loaded
     if (this.carriers.length) this.handleSelectCarrier(this.carriers[0])
+
+    // Select the first tour if the tours are loaded
+    if (this.tours.length) this.handleSelectTour(this.tours[0])
   },
 
   beforeDestroy() {

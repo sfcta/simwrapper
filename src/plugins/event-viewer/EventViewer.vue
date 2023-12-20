@@ -13,6 +13,7 @@
     :radius="this.guiConfig.radius"
     :mapIsIndependent="false"
     :simulationTime="timeFilter[1]"
+    :projection="vizDetails.projection"
   )
 
   zoom-buttons(v-if="!thumbnail" corner="bottom")
@@ -144,6 +145,7 @@ const MyComponent = defineComponent({
         source: new Float32Array(),
         dest: new Float32Array(),
         linkIds: [],
+        projection: '',
       } as NetworkLinks,
       linkIdLookup: {} as any,
       guiConfig: {
@@ -342,7 +344,7 @@ const MyComponent = defineComponent({
         const e = err as any
         console.log('failed')
 
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.ERROR,
           msg: `File not found`,
           desc: `Could not find: ${this.myState.subfolder}/${this.myState.yamlConfig}`,
@@ -364,16 +366,16 @@ const MyComponent = defineComponent({
 
       for (const key in this.YAMLrequirementsXY) {
         if (key in configuration === false) {
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.ERROR,
-            msg: `YAML file missing required key: ${key}`,
-            desc: 'Check this.YAMLrequirementsXY for required keys',
+            msg: `EventViewer missing required key: ${key}`,
+            desc: `Required keys: ${Object.keys(this.YAMLrequirementsXY)}`,
           })
         }
       }
 
       if (configuration.radius == 0) {
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.WARNING,
           msg: `Radius set to zero`,
           desc: 'Radius can not be zero, preset value used instead. ',
@@ -381,7 +383,7 @@ const MyComponent = defineComponent({
       }
 
       if (configuration.zoom < 5 || configuration.zoom > 20) {
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.WARNING,
           msg: `Zoom is out of the recommended range `,
           desc: 'Zoom levels should be between 5 and 20. ',
@@ -432,7 +434,7 @@ const MyComponent = defineComponent({
           this.myState.statusMessage = message.status
         } else if (message.error) {
           this.myState.statusMessage = message.error
-          this.$store.commit('setStatus', {
+          this.$emit('error', {
             type: Status.ERROR,
             msg: `XYT Loading Error`,
             desc: `Error loading: ${this.myState.subfolder}/${this.vizDetails.file}`,
@@ -632,8 +634,10 @@ const MyComponent = defineComponent({
       const network = await this.myDataManager.getRoadNetwork(
         networkFilename,
         this.myState.subfolder,
-        Object.assign({ projection: '25833' }, this.vizDetails)
+        Object.assign({}, this.vizDetails)
       )
+
+      this.vizDetails.projection = '' + network.projection
 
       const linkIdLookup = {} as any
       let i = 0
@@ -659,7 +663,7 @@ const MyComponent = defineComponent({
       } catch (e) {
         console.error(e)
         this.myState.statusMessage = '' + e
-        this.$store.commit('setStatus', {
+        this.$emit('error', {
           type: Status.ERROR,
           msg: `Loading/Parsing Error`,
           desc: 'Error loading/parsing: ${this.myState.subfolder}/${this.vizDetails.file}',

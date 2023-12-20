@@ -32,6 +32,7 @@ export function addLocalFilesystem(handle: FileSystemAPIHandle, key: string | nu
 }
 
 let fileSystems: FileSystemConfig[] = [
+  // DO NOT REMOVE THESE, THEY ARE FOR INTERNAL APP USE
   {
     name: webLiveHostname + ' live folders',
     slug: 'live',
@@ -59,12 +60,24 @@ let fileSystems: FileSystemConfig[] = [
     baseURL: loc.origin + '/data',
     hidden: true,
   },
+
+  // End. Below here, these are editable:
+
   {
     name: 'localhost:8000',
     slug: 'local',
     description: 'Files on this computer, shared using "simwrapper serve" tool',
     baseURL: 'http://localhost:8000',
     thumbnail: '/simwrapper/images/thumb-localfiles.jpg',
+  },
+  {
+    name: 'Sample Runs',
+    slug: 'sample-runs',
+    description: 'Pre-built dashboards for exploration',
+    thumbnail: 'images/thumb-localfiles.jpg',
+    baseURL: 'https://svn.vsp.tu-berlin.de/repos/public-svn/shared/billy/simwrapper/sample-data',
+    hidden: true,
+    example: true,
   },
 ]
 
