@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [3.0.4](https://github.com/simwrapper/simwrapper/compare/v3.0.3...v3.0.4) (2024-03-18)
+
+
+### Bug Fixes
+
+* Restore missing error messages in single-panel mode ([c667a83](https://github.com/simwrapper/simwrapper/commit/c667a837ae33d754db2ad9e8f6d1adb766ad1e16))
+* **shapefile:** filter out features that don't have a geometry (crash) ([20e2c91](https://github.com/simwrapper/simwrapper/commit/20e2c91349b0919231eb9b7ef1ebc0df77702944))
+
+### [3.0.3](https://github.com/simwrapper/simwrapper/compare/v3.0.2...v3.0.3) (2024-01-24)
+
+
+### Bug Fixes
+
+* Markdown panels should stretch to fit content unless height is given ([b24f10d](https://github.com/simwrapper/simwrapper/commit/b24f10d54600621072fdafeda910bb8d8a96fd4b))
+* On Chrome, local-files refreshing page often fails and always requires reauthentication ([6f692b4](https://github.com/simwrapper/simwrapper/commit/6f692b4401aa022bbfb50a8898324c777191d39c)), closes [#322](https://github.com/simwrapper/simwrapper/issues/322)
+
+### [3.0.2](https://github.com/simwrapper/simwrapper/compare/v3.0.1...v3.0.2) (2024-01-17)
+
+
+### Bug Fixes
+
+* Incorrect join on single feature when using DBF ([e5669bb](https://github.com/simwrapper/simwrapper/commit/e5669bb1c508fcedf2273e3020ade02c2c946c35)), closes [#322](https://github.com/simwrapper/simwrapper/issues/322)
+* split panel scroll is broken for folders with long lists ([30c426d](https://github.com/simwrapper/simwrapper/commit/30c426d3d8bff424e285e354af62a50a10c8e8a6))
+
 ### [3.0.1](https://github.com/simwrapper/simwrapper/compare/v3.0.0...v3.0.1) (2023-12-18)
 
 
