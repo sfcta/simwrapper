@@ -3,7 +3,6 @@
 // Pass in a filename; can be MATSim network.xml.gz or preprocessed GeoJSON
 // Get a table of links with Anode Bnode and properties
 
-import { decompressSync } from 'fflate'
 import { XMLParser } from 'fast-xml-parser'
 import reproject from 'reproject'
 import * as shapefile from 'shapefile'
@@ -11,9 +10,7 @@ import * as shapefile from 'shapefile'
 import Coords from '@/js/Coords'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
 import { DataTable, FileSystemConfig } from '@/Globals'
-import { findMatchingGlobInFiles } from '@/js/util'
-
-import DataFetcherWorker from '@/workers/DataFetcher.worker.ts?worker'
+import { gUnzip, findMatchingGlobInFiles } from '@/js/util'
 
 enum NetworkFormat {
   MATSIM_XML,
@@ -37,10 +34,15 @@ let _isFirefox = false
 let _rawData = null as Uint8Array | null
 let _options = {} as any
 let _crs = ''
+let _extraColumns = false
 
 // ENTRY POINT: -----------------------
 onmessage = async function (e) {
-  if (e.data.crs) {
+  // does user want extra columns
+  if (e.data.extraColumns) _extraColumns = true
+
+  if ('crs' in e.data) {
+    // console.log(1)
     _crs = e.data.crs || 'Atlantis'
 
     switch (_networkFormat) {
@@ -55,7 +57,13 @@ onmessage = async function (e) {
         memorySafeXMLParser()
         break
     }
+  } else if (e.data.xmlBuffer) {
+    // console.log(5)
+    const cargo = await gUnzip(e.data.xmlBuffer)
+    memorySafeXMLParser(new Uint8Array(cargo), {})
+    return
   } else {
+    // console.log(2, e.data)
     const { filePath, fileSystem, vizDetails, options, isFirefox } = e.data
 
     // guess file type from extension
@@ -74,7 +82,9 @@ onmessage = async function (e) {
 }
 
 function guessFileTypeFromExtension(name: string) {
-  const f = name.toLocaleLowerCase()
+  // console.log(3, name)
+  const fname = name || _filePath
+  const f = fname.toLocaleLowerCase()
 
   // regex is ugly, but this tests for various extensions with/without .gz suffix
   if (/\.xml(|\.gz)$/.test(f)) return NetworkFormat.MATSIM_XML
@@ -193,7 +203,7 @@ async function parseSFCTANetworkAndPostResults(projection: string) {
   }
 
   // all done! post the links
-  const links = { source, dest, linkIds, projection: guessCRS }
+  const links = { source, dest, linkId: linkIds, projection: guessCRS }
 
   postMessage({ links }, [links.source.buffer, links.dest.buffer])
 
@@ -202,8 +212,9 @@ async function parseSFCTANetworkAndPostResults(projection: string) {
 
 async function memorySafeXMLParser(rawData?: Uint8Array, options?: any) {
   // pick up where we left off if user interactively gave us the CRS
-  if (rawData) _rawData = rawData
+  if (rawData && rawData.length) _rawData = rawData
   if (options) _options = options
+  if (options?.crs) _crs = options.crs
 
   if (!_rawData) {
     console.error("can't restart: no data")
@@ -217,7 +228,7 @@ async function memorySafeXMLParser(rawData?: Uint8Array, options?: any) {
   // Be careful to only split chunks at the border between </link> and <link>
 
   // 9% at a time seems nice
-  let chunkBytes = Math.floor(_rawData.length / 11)
+  let chunkBytes = _rawData.length < 16384 ? _rawData.length : Math.floor(_rawData.length / 11)
 
   let decoded = ''
   let currentBytePosition = chunkBytes
@@ -226,7 +237,7 @@ async function memorySafeXMLParser(rawData?: Uint8Array, options?: any) {
   // Find end of nodes; close them and close network. Parse it.
   postMessage({ status: 'Parsing nodes...' })
 
-  while (currentBytePosition < _rawData.length) {
+  while (currentBytePosition <= _rawData.length) {
     const text = decoder.decode(firstChunk)
     decoded += text
 
@@ -242,8 +253,6 @@ async function memorySafeXMLParser(rawData?: Uint8Array, options?: any) {
   let networkNodes = decoded.slice(0, endNodes) + '\n</network>\n'
 
   let network = parseXML(networkNodes)
-
-  // console.log({ network })
 
   // What is the CRS?
   let coordinateReferenceSystem = _crs
@@ -320,7 +329,6 @@ async function memorySafeXMLParser(rawData?: Uint8Array, options?: any) {
   let endLinks = decoded.lastIndexOf('</link>')
   let closeTagLength = 7
 
-  console.log(80, endLinks)
   // old MATSim networks used <link blah=.../> instead of <link asdfasdf>...</link>
   if (endLinks === -1) {
     endLinks = decoded.lastIndexOf('/>')
@@ -344,7 +352,9 @@ async function memorySafeXMLParser(rawData?: Uint8Array, options?: any) {
   while (true) {
     startByte = endByte
     endByte = startByte + chunkBytes
-    postMessage({ status: `Parsing links... ${Math.floor((100 * startByte) / _rawData.length)}%` })
+    postMessage({
+      status: `Parsing links... ${Math.floor((100 * startByte) / _rawData.length)}%`,
+    })
     const nextChunk = _rawData.subarray(startByte, endByte)
 
     decoded = leftovers + decoder.decode(nextChunk)
@@ -366,31 +376,57 @@ async function memorySafeXMLParser(rawData?: Uint8Array, options?: any) {
   // console.log({ totalNumberOfLinks })
 
   // Last chunk, close out.
-  const source: Float32Array = new Float32Array(2 * totalNumberOfLinks)
-  const dest: Float32Array = new Float32Array(2 * totalNumberOfLinks)
+  const source = new Float32Array(2 * totalNumberOfLinks)
+  const dest = new Float32Array(2 * totalNumberOfLinks)
+  let freespeed = new Float32Array(0)
+  let length = new Float32Array(0)
+  if (_extraColumns) {
+    freespeed = new Float32Array(totalNumberOfLinks)
+    length = new Float32Array(totalNumberOfLinks)
+  }
 
   let offset = 0
   for (const chunk of linkChunks) {
     for (let i = 0; i < chunk[0].length; i++) {
-      source[offset + i] = chunk[0][i]
-      dest[offset + i] = chunk[1][i]
+      source[2 * offset + i] = chunk[0][i]
+      dest[2 * offset + i] = chunk[1][i]
     }
-    offset += chunk[0].length
+    if (_extraColumns) {
+      for (let i = 0; i < chunk[2].length; i++) {
+        freespeed[offset + i] = chunk[2][i]
+        length[offset + i] = chunk[3][i]
+      }
+    }
+    offset += chunk[0].length / 2
   }
 
-  const links = {
-    source,
-    dest,
-    linkIds,
-    projection: coordinateReferenceSystem,
+  if (_extraColumns) {
+    const links = {
+      source,
+      dest,
+      linkId: linkIds,
+      freespeed,
+      length,
+      projection: coordinateReferenceSystem,
+    }
+    postMessage({ links }, [
+      links.source.buffer,
+      links.dest.buffer,
+      links.freespeed.buffer,
+      links.length.buffer,
+    ])
+  } else {
+    const links = { source, dest, linkId: linkIds, projection: coordinateReferenceSystem }
+    postMessage({ links }, [links.source.buffer, links.dest.buffer])
   }
-  postMessage({ links }, [links.source.buffer, links.dest.buffer])
 }
 
 // build [source,dest] Float32Array of link positions
-function buildLinkChunk(nodes: any, linkIds: any[], links: any[]): Float32Array[] {
-  const source: Float32Array = new Float32Array(2 * links.length)
-  const dest: Float32Array = new Float32Array(2 * links.length)
+function buildLinkChunk(nodes: any, linkIds: any[], links: any[]) {
+  const source = new Float32Array(2 * links.length)
+  const dest = new Float32Array(2 * links.length)
+  const freespeed = new Float32Array(_extraColumns ? links.length : 0)
+  const linkLength = new Float32Array(_extraColumns ? links.length : 0)
 
   for (let i = 0; i < links.length; i++) {
     const link = links[i]
@@ -403,18 +439,23 @@ function buildLinkChunk(nodes: any, linkIds: any[], links: any[]): Float32Array[
     source[2 * i + 1] = nodeFrom ? nodeFrom[1] : NaN
     dest[2 * i + 0] = nodeTo ? nodeTo[0] : NaN
     dest[2 * i + 1] = nodeTo ? nodeTo[1] : NaN
+    if (_extraColumns) {
+      freespeed[i] = parseFloat(link.$freespeed || 0.0)
+      linkLength[i] = parseFloat(link.$length || 0.0)
+    }
   }
-
-  return [source, dest]
+  return [source, dest, freespeed, linkLength]
 }
 
 async function fetchMatsimXmlNetwork(filePath: string, fileSystem: FileSystemConfig, options: any) {
   const rawData = await fetchGzip(filePath, fileSystem)
-
+  // console.log({ rawData })
+  if (!rawData) throw 'Failed to unzip/parse'
+  const u8 = new Uint8Array(rawData)
   try {
     // always use the memory-safe parser, because Firefox randomly hangs without any
     // error messages or warnings when the parse object is too big :-(
-    await memorySafeXMLParser(rawData, options)
+    await memorySafeXMLParser(u8, options)
   } catch (e) {
     console.error('' + e)
     postMessage({ error: 'Could not parse network XML' })
@@ -485,7 +526,7 @@ async function fetchGeojson(filePath: string, fileSystem: FileSystemConfig) {
     // Geojson spec is unclear on where the ID should go.
     // - Section 3 says if there is a general ID, it "should" go
     //   in the top level of the feature itself, ie. feature.id
-    //   https://datatracker.ietf.org/doc/html/rfc7946#section-6
+    //   https://datatracker.ietf.org/doc/html/rfc7946#section-3
     // - Section 6 says that all properties of the feature
     //   should go in the "properties" object and putting anything
     //   outside of the geometry or properties will cause
@@ -497,7 +538,7 @@ async function fetchGeojson(filePath: string, fileSystem: FileSystemConfig) {
     linkIds[i] = feature.id ?? feature.properties.id
   }
 
-  const links = { source, dest, linkIds, projection: 'EPSG:4326' }
+  const links = { source, dest, linkId: linkIds, projection: 'EPSG:4326' }
 
   // all done! post the links
   postMessage({ links }, [links.source.buffer, links.dest.buffer])
@@ -505,6 +546,7 @@ async function fetchGeojson(filePath: string, fileSystem: FileSystemConfig) {
 
 async function fetchGzip(filePath: string, fileSystem: FileSystemConfig) {
   let resolvedPath = filePath
+
   try {
     const httpFileSystem = new HTTPFileSystem(fileSystem)
 
@@ -525,40 +567,16 @@ async function fetchGzip(filePath: string, fileSystem: FileSystemConfig) {
       resolvedPath = `${subfolder}/${matchingFiles[0]}`
     }
 
-    console.log(100, 'RESOLVED PATH', resolvedPath)
     const blob = await httpFileSystem.getFileBlob(resolvedPath)
     if (!blob) throwError('BLOB IS NULL')
 
     const buffer = await blob.arrayBuffer()
-    const cargo = gUnzip(buffer)
+    const cargo = await gUnzip(buffer)
     return cargo
   } catch (e) {
     console.error('oh no', e)
     throwError('Error loading ' + filePath)
   }
-}
-
-/**
- * This recursive function gunzips the buffer. It is recursive because
- * some combinations of subversion, nginx, and various user browsers
- * can single- or double-gzip .gz files on the wire. It's insane but true.
- */
-function gUnzip(buffer: ArrayBuffer): any {
-  const u8 = new Uint8Array(buffer)
-
-  // GZIP always starts with a magic number, hex 0x8b1f
-  const header = new Uint16Array(buffer, 0, 2)
-
-  if (header[0] === 0x8b1f) {
-    try {
-      const result = decompressSync(u8)
-      return result
-    } catch (e) {
-      console.error('eee', e)
-    }
-  }
-
-  return buffer
 }
 
 function throwError(message: string) {
@@ -606,33 +624,6 @@ function parseXML(xml: string, settings: any = {}) {
     console.error('WHAT', e)
     throw Error('' + e)
   }
-}
-
-async function fetchDataset(config: { dataset: string }) {
-  const { files } = await _fileApi.getDirectory(_subfolder)
-  return new Promise<DataTable>((resolve, reject) => {
-    const thread = new DataFetcherWorker()
-    try {
-      thread.postMessage({
-        fileSystemConfig: _fileSystemConfig,
-        subfolder: _subfolder,
-        files: files,
-        config: config,
-      })
-
-      thread.onmessage = e => {
-        thread.terminate()
-        if (e.data.error) {
-          reject(e.data)
-        }
-        resolve(e.data)
-      }
-    } catch (err) {
-      thread.terminate()
-      console.error(err)
-      reject('' + err)
-    }
-  })
 }
 
 // // make the typescript compiler happy on import

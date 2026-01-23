@@ -1,8 +1,8 @@
 <template lang="pug">
-.panel
+.xpanel
 
-    .close(@click.stop="$emit('close')")
-      i.fa.fa-times
+    //- .close(@click.stop="$emit('close')")
+    //-   i.fa.fa-times
 
     // theme ------------------
     .option
@@ -11,7 +11,7 @@
         outlined
         :style="isLight") {{ $t('light') }}
 
-      b-button.button.is-small.is-gray(@click="setTheme('dark')"
+      b-button.button.is-small.is-white(@click="setTheme('dark')"
         outlined
         :style="isDark") {{ $t('dark') }}
 
@@ -26,6 +26,24 @@
         outlined
         :style="isDE") DE
 
+    // gamepad axes
+    .option
+      h5 {{ $t('gamepad') }}
+      b-button.button.is-small.is-white(@click="setGamepad(1)"
+        outlined
+        :style="isNormal") {{ $t('gamepad-normal') }}
+
+      b-button.button.is-small.is-gray(@click="setGamepad(-1)"
+        outlined
+        :style="isInverted") {{ $t('gamepad-inverted') }}
+
+    // account / auth ---------------
+    //- .option
+    //-   h5 {{ $t('authentication') }}
+    //-   b-button.button.is-small.is-white(@click="clearTokens()"
+    //-     outlined
+    //-     :style="yellow") {{ $t('clearToken') }}
+
 </template>
 
 <script lang="ts">
@@ -39,6 +57,11 @@ const i18n = {
       language: 'Language',
       dataSources: 'Data Sources',
       addDataSources: 'Add Data Source',
+      authentication: 'Accounts',
+      clearToken: 'Logout',
+      gamepad: 'Gamepad',
+      'gamepad-normal': 'Normal',
+      'gamepad-inverted': 'Inverted',
     },
     de: {
       translate: 'Die Übersetzungen sind unvollständig, werden aber immer besser...',
@@ -47,6 +70,11 @@ const i18n = {
       dark: 'Dunkel',
       language: 'Sprache',
       dataSources: 'Datenquellen',
+      authentication: 'Accounts',
+      clearToken: 'Logout',
+      gamepad: 'Gamepad',
+      'gamepad-normal': 'Normal',
+      'gamepad-inverted': 'Inverted',
     },
   },
 }
@@ -54,6 +82,8 @@ const i18n = {
 import { defineComponent } from 'vue'
 
 import globalStore from '@/store'
+import fileSystems from '@/js/HTTPFileSystem'
+import HTTPFileSystem from '@/js/HTTPFileSystem'
 
 export default defineComponent({
   name: 'SettingsPanel',
@@ -70,11 +100,18 @@ export default defineComponent({
   },
   watch: {
     'state.isDarkMode'() {
-      console.log('ooop!', this.state.isDarkMode)
       this.theme = this.state.isDarkMode ? 'dark' : 'light'
     },
   },
   computed: {
+    yellow(): any {
+      return {
+        backgroundColor: '#ff6657',
+        color: '#222',
+        borderColor: '#aaa',
+      }
+    },
+
     isLight(): any {
       return this.theme == 'light'
         ? {
@@ -84,7 +121,7 @@ export default defineComponent({
           }
         : {
             backgroundColor: 'unset',
-            color: '#888',
+            color: '#222',
             borderColor: '#aaa',
           }
     },
@@ -98,7 +135,35 @@ export default defineComponent({
           }
         : {
             backgroundColor: 'unset',
-            color: '#888',
+            color: '#222',
+            borderColor: '#aaa',
+          }
+    },
+
+    isNormal(): any {
+      return this.state.gamepad == 1
+        ? {
+            backgroundColor: '#ffdd57',
+            color: '#222',
+            borderColor: '#aaa',
+          }
+        : {
+            backgroundColor: 'unset',
+            color: '#222',
+            borderColor: '#aaa',
+          }
+    },
+
+    isInverted(): any {
+      return this.state.gamepad == -1
+        ? {
+            backgroundColor: '#7957d5',
+            color: 'white',
+            borderColor: '#aaa',
+          }
+        : {
+            backgroundColor: 'unset',
+            color: '#222',
             borderColor: '#aaa',
           }
     },
@@ -112,7 +177,7 @@ export default defineComponent({
           }
         : {
             backgroundColor: 'unset',
-            color: '#888',
+            color: '#222',
             borderColor: '#aaa',
           }
     },
@@ -126,7 +191,7 @@ export default defineComponent({
           }
         : {
             backgroundColor: 'unset',
-            color: '#888',
+            color: '#222',
             borderColor: '#aaa',
           }
     },
@@ -134,13 +199,33 @@ export default defineComponent({
   methods: {
     setTheme(theme: string) {
       this.theme = theme
-      console.log(this.theme)
       globalStore.commit('setTheme', theme)
+      setTimeout(() => this.$emit('close'), 700)
     },
 
     setLanguage(lang: string) {
       this.$store.commit('setLocale', lang)
       this.$root.$i18n.locale = lang
+      setTimeout(() => this.$emit('close'), 700)
+    },
+
+    setGamepad(value: number) {
+      this.$store.commit('setGamepad', value)
+      setTimeout(() => this.$emit('close'), 700)
+    },
+
+    clearTokens() {
+      for (const fileSystem of globalStore.state.svnProjects) {
+        if (fileSystem.needPassword) {
+          localStorage.removeItem(`auth-token-${fileSystem.slug}`)
+          const fs = new HTTPFileSystem(fileSystem, globalStore)
+          fs.clearCache()
+        }
+      }
+      setTimeout(() => {
+        this.$emit('close')
+        this.$router.replace('/')
+      }, 500)
     },
   },
 })
@@ -148,12 +233,15 @@ export default defineComponent({
 
 <style scoped lang="scss">
 @import '@/styles.scss';
+$appTag: #32926f;
 
-.panel {
+.xpanel {
   user-select: none;
   display: flex;
   flex-direction: column;
-  width: 12.25rem;
+  filter: $filterShadow;
+  z-index: 30000 !important;
+  background-color: #eee;
 }
 
 h4 {
@@ -167,8 +255,10 @@ h4 {
 
 h5 {
   font-weight: bold;
-  margin-top: 0rem;
-  margin-bottom: 0.25rem;
+  margin-top: 0.5rem;
+  margin-bottom: 4px;
+  line-height: 1rem;
+  color: $appTag;
 }
 
 .top-panel {

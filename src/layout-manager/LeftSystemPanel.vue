@@ -2,13 +2,14 @@
 .panel
 
   .top-panel
-    .simwrapper-logo(@click="clickedOnFolder({root: ''})")
-      img(:src="logo")
+    h4
+      i.fas.fa-database
+      span &nbsp; Data Sources
 
   .middle-panel
 
     .is-chrome(v-if="isChrome")
-      h3 Local Files
+      h3 Browse Local Files
       .items
         .project-root.local(v-for="row in localFileHandles" :key="row.key"
           @click="clickedBrowseChromeLocalFolder(row)")
@@ -22,9 +23,9 @@
 
     h3 Data Sources
     .items(v-if="!showAddDataSource")
-      .project-root(v-for="project in allRoots" :key="project.slug"
-        @click="clickedOnFolder({root: project.slug})")
-
+      .project-root(v-for="project in allRoots.filter(p => !p.example)" :key="project.slug"
+        @click="clickedOnFolder({root: project.slug})"
+      )
         p.root {{ project.name }}
           i.fa.fa-times(@click.stop="clickedDataSourceDelete(project)")
         p.description {{ project.description }}
@@ -37,35 +38,22 @@
     .items(v-if="showAddDataSource")
       add-data-source(@close="showAddDataSource=false" )
 
-    h3 PINNED
+    h3 Example Dashboards
+    .items
+      .project-root(v-for="project in allRoots.filter(p => p.example)" :key="project.slug"
+        @click="clickedOnFolder({root: project.slug})"
+      )
+        p.root {{ project.name }}
+          i.fa.fa-times(@click.stop="clickedDataSourceDelete(project)")
+        p.description {{ project.description }}
+
+    h3 Starred Locations
     .items
       .project-root(v-for="favorite in globalState.favoriteLocations" :key="favorite.fullPath"
         @click="clickedOnFavorite(favorite)")
         p.root {{ favorite.label }}
           i.fa.fa-times(@click.stop="clickedDeleteFavorite(favorite)")
         p.description {{ favorite.hint || `${favorite.root}${favorite.subfolder}` }}
-
-  //- .bottom-panel
-
-  //-   h3 DOCUMENTATION
-  //-   .items
-  //-     p: a(href="https://simwrapper.github.io/docs" target="_blank") Documentation site
-  //-     p: a(href="https://simwrapper.github.io/docs/examples" target="_blank") Getting started
-  //-     p: a(href="https://simwrapper.github.io/blog" target="_blank") News &amp; updates
-
-  //- .action-panel
-  //-   p.show-hide(@click="$store.commit('setShowLeftBar', false)")
-  //-     i.fas.fa-arrow-left
-  //-     | &nbsp;&nbsp;hide
-    //- p.settings-icon(@click="$store.commit('rotateColors')")
-    //-   i.fas.fa-adjust
-    //-   | &nbsp;&nbsp;{{ globalState.isDarkMode ? 'dark':'light' }}
-    //- p.settings-icon(@click="updateLanguage")
-    //-   i.fas.fa-globe
-    //-   | &nbsp;&nbsp;{{ globalState.locale }}
-    //- p.settings-icon(@click="$emit('split', {root, xsubfolder: subfolder})")
-    //-   i.fas.fa-columns
-    //-   | &nbsp;&nbsp;split
 
 </template>
 
@@ -135,10 +123,8 @@ interface IMyState {
 }
 
 import { defineComponent } from 'vue'
-import type { PropType } from 'vue'
 import { get, set, clear } from 'idb-keyval'
 import markdown from 'markdown-it'
-import mediumZoom from 'medium-zoom'
 import micromatch from 'micromatch'
 
 import globalStore from '@/store'
@@ -150,15 +136,9 @@ import HTTPFileSystem from '@/js/HTTPFileSystem'
 import AddDataSource from './AddDataSource.vue'
 import ErrorPanel from '@/components/left-panels/ErrorPanel.vue'
 import FileSystemProjects from '@/components/FileSystemProjects.vue'
-import LeftIconPanel, { Section } from './LeftIconPanel.vue'
 import TopsheetsFinder from '@/components/TopsheetsFinder/TopsheetsFinder.vue'
 
 import LOGO_SIMWRAPPER from '@/assets/simwrapper-logo/SW_logo_white.png'
-
-const components = Object.assign(
-  { AddDataSource, FileSystemProjects, TopsheetsFinder, ErrorPanel },
-  pluginComponents
-)
 
 export default defineComponent({
   name: 'SystemPanel',
@@ -199,15 +179,6 @@ export default defineComponent({
   watch: {
     'globalState.svnProjects'() {
       this.updateShortcuts()
-    },
-    'globalState.colorScheme'() {
-      // medium-zoom freaks out if color theme is swapped.
-      // so let's reload images just in case.
-      // this.fetchFolderContents()
-    },
-    subfolder() {
-      return
-      // if (this.subfolder) this.updateRoute()
     },
     'globalState.authAttempts'() {
       this.authenticationChanged()
@@ -282,19 +253,12 @@ export default defineComponent({
       } else {
         this.buildShowEverythingView()
       }
-
-      // make sure page is rendered before we attach zoom semantics
-      await this.$nextTick()
-      mediumZoom('.medium-zoom', {
-        background: '#444450',
-      })
     },
 
     updateShortcuts() {
       const roots = this.globalState.svnProjects.filter(
         source => !source.hidden && !source.slug.startsWith('fs')
       )
-
       this.allRoots = roots
     },
 
@@ -536,61 +500,44 @@ export default defineComponent({
 <style scoped lang="scss">
 @import '@/styles.scss';
 .panel {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto 1fr auto auto;
-  height: 100%;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
   user-select: none;
   font-size: 0.9rem;
   color: #eee;
-}
-
-.left-icon-panel {
-  grid-column: 1 / 2;
-  grid-row: 2 / 5;
+  background: linear-gradient(150deg, #2e3f5a, #0c2f23);
+  border-radius: 0px;
 }
 
 .top-panel {
-  grid-column: 1 / 3;
-  grid-row: 1 / 2;
   display: flex;
   flex-direction: column;
-  border-bottom: 1px solid #ffffff44;
-  margin: 0 16px;
-
-  // background-color: #216a6d; // bgTreeItem;
+  // margin: 0 16px;
 }
 
 h4 {
   background-color: #00000080;
   text-transform: uppercase;
-  text-align: center;
-  padding: 0.25rem 0.5rem;
-  margin-bottom: 0.25rem;
+  padding: 4px 0.5rem 5px 0.5rem;
+  font-size: 1rem;
   font-weight: bold;
   text-transform: uppercase;
-  color: #ddd;
-}
-
-.middle-panel {
-  grid-column: 2 / 3;
-  grid-row: 2 / 3;
-}
-
-.bottom-panel {
-  grid-column: 2 / 3;
-  grid-row: 3 / 4;
 }
 
 .middle-panel,
 .bottom-panel {
   display: flex;
   flex-direction: column;
-  padding: 0 0.5rem 0 0.75rem;
+  padding: 0 0rem 0.5rem 0;
   overflow-y: auto;
-  overflow-x: hidden;
   text-align: left;
   user-select: none;
+  margin-left: 0.75rem;
 
   p,
   a {
@@ -677,7 +624,7 @@ h2 {
   font-size: 0.75rem;
   a {
     padding: 0.25rem 0.4rem;
-    border: 1px solid #00000000;
+    border: 1px solid #ccc;
     border-radius: 4px;
     color: var(--textLink);
   }
@@ -802,7 +749,7 @@ h2 {
 h3 {
   font-family: $mainFont;
   font-size: 1rem;
-  margin-top: 1rem;
+  margin-top: 1.5rem;
   margin-bottom: 0.5rem;
   margin-left: 6px;
   text-transform: uppercase;
@@ -815,5 +762,18 @@ h3 {
 .spacer {
   background-color: $themeColorPale;
   height: 0.5rem;
+}
+
+.top-panel {
+  display: flex;
+  flex-direction: column;
+  // margin: 8px 1rem 8px 8px;
+
+  h4 {
+    background-color: #060609;
+    color: $colorYellow;
+    padding: 4px 0.5rem;
+    text-align: center;
+  }
 }
 </style>

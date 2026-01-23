@@ -1,6 +1,6 @@
 import micromatch from 'micromatch'
 import { XMLParser } from 'fast-xml-parser'
-import { decompressSync } from 'fflate'
+import { format } from 'mathjs'
 
 /**
  * Useful for converting loaded PNG images to CSS
@@ -15,6 +15,32 @@ export function arrayBufferToBase64(buffer: any) {
     binary += String.fromCharCode(bytes[i])
   }
   return window.btoa(binary)
+}
+
+async function bytesToBase64DataUrl(bytes: any, type = 'application/octet-stream') {
+  return await new Promise((resolve, reject) => {
+    const reader = Object.assign(new FileReader(), {
+      onload: () => resolve(reader.result),
+      onerror: () => reject(reader.error),
+    })
+    reader.readAsDataURL(new File([bytes], '', { type }))
+  })
+}
+
+async function dataUrlToBytes(dataUrl: string) {
+  const res = await fetch(dataUrl)
+  return new Uint8Array(await res.arrayBuffer())
+}
+
+function identifyTypedArray(arr: any) {
+  if (arr instanceof Float32Array) {
+    return 'Float32Array'
+  } else if (arr instanceof Float64Array) {
+    return 'Float64Array'
+  } else if (arr instanceof Array) {
+    return 'Array'
+  }
+  return 'Unknown'
 }
 
 /**
@@ -113,27 +139,42 @@ export async function parseXML(xml: string, settings: any = {}) {
   })
 }
 
-/**
- * This recursive function gunzips the buffer. It is recursive because
- * some combinations of subversion, nginx, and various user browsers
- * can single- or double-gzip .gz files on the wire. It's insane but true.
- */
-export function gUnzip(buffer: ArrayBuffer): any {
-  const u8 = new Uint8Array(buffer)
-
+export async function gUnzip(buffer: ArrayBuffer) {
   // GZIP always starts with a magic number, hex 0x8b1f
   const header = new Uint16Array(buffer, 0, 2)
-
   if (header[0] === 0x8b1f) {
     try {
-      const result = decompressSync(u8)
-      return result
+      // use new 2023 DecompressionStream API
+      const response = new Response(buffer)
+      const stream = new DecompressionStream('gzip')
+      const decompressed = await response.body?.pipeThrough(stream)
+      const resultBuffer = await new Response(decompressed).arrayBuffer()
+      // recursive because some combos of Firefox,Apache,Subversion will double-gzip!
+      return await gUnzip(resultBuffer)
     } catch (e) {
       console.error('eee', e)
     }
   }
-
   return buffer
 }
 
-export default { arrayBufferToBase64, debounce, findMatchingGlobInFiles, gUnzip, parseXML }
+export function precise(x: number, precision: number) {
+  return format(x, { lowerExp: -6, upperExp: 6, precision })
+}
+
+export function sleep(milliseconds: number) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds))
+}
+
+export default {
+  arrayBufferToBase64,
+  dataUrlToBytes,
+  bytesToBase64DataUrl,
+  debounce,
+  findMatchingGlobInFiles,
+  identifyTypedArray,
+  gUnzip,
+  parseXML,
+  precise,
+  sleep,
+}

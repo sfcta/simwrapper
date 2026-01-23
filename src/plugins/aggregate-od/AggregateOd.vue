@@ -1,7 +1,7 @@
 <template lang="pug">
 .mycomponent(:id="containerId")
 
-  zoom-buttons.zoom-buttons(v-if="!thumbnail")
+  zoom-buttons.zoom-buttons(v-if="!thumbnail" corner="top-left")
 
   .map-container
     .mymap(:id="mapId")
@@ -11,18 +11,25 @@
 
     .lower-left(v-if="!thumbnail && !loadingText")
       .subheading {{ $t('lineWidths')}}
-      scale-slider.scale-slider(:stops='scaleValues' :initialValue='currentScale' @change='bounceScaleSlider')
+      scale-slider.scale-slider(
+        :stops='scaleValues'
+        :initialValue='currentScale'
+        :tooltip="false"
+        @change='bounceScaleSlider'
+      )
 
       .subheading {{ $t('hide')}}
       line-filter-slider.scale-slider(
         :initialValue="lineFilter"
-        @change='bounceLineFilter')
+        :tooltip="false"
+        @change='bounceLineFilter'
+      )
 
     .lower-right(v-if="!thumbnail && !isMobile")
       legend-box.complication(:rows="legendRows")
       scale-box.complication(:rows="scaleRows")
 
-  .widgets(v-if="!thumbnail" :style="{'padding': yamlConfig ? '0 0.5rem 0.5rem 0.5rem' : '0 0'}")
+  .widgets(v-if="!thumbnail" :style="{'padding': yamlConfig ? '0 0.5rem 0.5rem 0.5rem' : '2px 4px'}")
 
     //- TIME SLIDER ----
     .widget-column(v-if="this.headers.length > 2" style="min-width: 8rem")
@@ -58,7 +65,7 @@ const i18n = {
       lineWidth: 'Line width:',
       lineWidths: 'Line widths',
       hide: 'Hide smaller than',
-      time: 'Time of Day',
+      time: 'Filter',
       duration: 'Duration',
       circle: 'Centroids',
       showCentroids: 'Show centroids',
@@ -67,7 +74,20 @@ const i18n = {
       origins: 'Origins',
       dest: 'Destinations',
     },
-    de: {},
+    de: {
+      legend: 'Legende:',
+      lineWidth: 'Line width',
+      lineWidths: 'Line widths',
+      hide: 'Hide smaller than',
+      time: 'Filter',
+      duration: 'Duration',
+      circle: 'Centroids',
+      showCentroids: 'Show centroids',
+      showNumbers: 'Show totals',
+      total: 'Totals for',
+      origins: 'Origins',
+      dest: 'Destinations',
+    },
   },
 }
 
@@ -77,13 +97,12 @@ import * as shapefile from 'shapefile'
 import * as turf from '@turf/turf'
 import { debounce } from 'debounce'
 import { FeatureCollection, Feature } from 'geojson'
-import maplibregl, { MapMouseEvent, PositionOptions } from 'maplibre-gl'
+import maplibregl from 'maplibre-gl'
 import nprogress from 'nprogress'
 import proj4 from 'proj4'
 import readBlob from 'read-blob'
 import YAML from 'yaml'
 
-import { findMatchingGlobInFiles } from '@/js/util'
 import Coords from '@/js/Coords'
 import CollapsiblePanel from '@/components/CollapsiblePanel.vue'
 import LegendBox from './LegendBoxOD.vue'
@@ -92,6 +111,7 @@ import ScaleBox from './ScaleBoxOD.vue'
 import TimeSlider from './TimeSlider.vue'
 import ScaleSlider from '@/components/ScaleSlider.vue'
 import ZoomButtons from '@/components/ZoomButtons.vue'
+import { findMatchingGlobInFiles } from '@/js/util'
 
 import { ColorScheme, FileSystem, FileSystemConfig, Status, VisualizationPlugin } from '@/Globals'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
@@ -109,17 +129,16 @@ interface AggOdYaml {
   title?: string
   description?: string
   idColumn?: string
+  centroidColumn?: string
   lineWidth?: number
   lineWidths?: number
   hideSmallerThan?: number
   mapIsIndependent?: boolean
 }
-
-const TOTAL_MSG = 'Alle >>'
+const BASE_URL = import.meta.env.BASE_URL
+const TOTAL_MSG = globalStore.state.locale.startsWith('de') ? 'Alle >>' : 'All >>'
 const FADED = 0.0 // 0.15
-
 const SCALE_WIDTH = [1, 3, 5, 10, 25, 50, 100, 150, 200, 300, 400, 450, 500, 1000, 5000]
-
 const INPUTS = {
   OD_FLOWS: 'O/D Flows (.csv)',
   SHP_FILE: 'Shapefile .SHP',
@@ -285,9 +304,18 @@ const Component = defineComponent({
     },
   },
   methods: {
+    updateTestData() {
+      //@ts-ignore
+      window.__testdata__ = {
+        centroids: this.centroidSource?.features,
+        spiderLinks: this.spiderLinkFeatureCollection?.features,
+        geojson: this.geojson?.features,
+      }
+    },
+
     setupResizer() {
       this.resizer = new ResizeObserver(() => {
-        if (this.mymap) this.mymap.resize()
+        // if (this.mymap) this.mymap.resize()
       })
 
       const viz = document.getElementById(this.containerId) as HTMLElement
@@ -310,8 +338,8 @@ const Component = defineComponent({
         pitch: this.mymap.getPitch(),
       }
 
-      if (!this.mapIsIndependent) this.$store.commit('setMapCamera', mapCamera)
-      if (!this.isMapMoving) this.isMapMoving = true
+      this.isMapMoving = true
+      if (!this.mapIsIndependent) globalStore.commit('setMapCamera', mapCamera)
     },
 
     async getVizDetails() {
@@ -332,10 +360,11 @@ const Component = defineComponent({
           this.setVizDetails()
         } catch (e) {
           console.error('' + e)
+          this.$emit('error', '' + e)
         }
       }
 
-      this.$emit('title', this.vizDetails.title)
+      this.$emit('title', this.vizDetails)
 
       this.scaleFactor = this.vizDetails.scaleFactor
       this.projection = this.vizDetails.projection
@@ -393,7 +422,7 @@ const Component = defineComponent({
 
     async loadFiles() {
       try {
-        this.loadingText = 'Dateien laden...'
+        this.loadingText = 'Loading...'
 
         const shpFilename = await this.findFilenameFromWildcard(
           `${this.myState.subfolder}/${this.vizDetails.shpFile}`
@@ -424,10 +453,13 @@ const Component = defineComponent({
 
     async setupMap() {
       try {
+        const style = `${BASE_URL}map-styles/${
+          this.globalState.isDarkMode ? 'dark' : 'positron'
+        }.json`
+        //@ts-ignore
         this.mymap = new maplibregl.Map({
           container: this.mapId,
-          style: globalStore.getters.mapStyle,
-          logoPosition: 'top-left',
+          style,
         })
       } catch (e) {
         console.error('HUH?')
@@ -439,8 +471,8 @@ const Component = defineComponent({
         if (extent) {
           const lnglat = JSON.parse(extent)
 
-          const mFac = this.isMobile ? 0 : 1
-          const padding = { top: 50 * mFac, bottom: 50 * mFac, right: 100 * mFac, left: 50 * mFac }
+          // const mFac = this.isMobile ? 0 : 1
+          // const padding = { top: 50 * mFac, bottom: 50 * mFac, right: 100 * mFac, left: 50 * mFac }
 
           this.$store.commit('setMapCamera', {
             longitude: 0.5 * (lnglat[0] + lnglat[2]),
@@ -459,23 +491,6 @@ const Component = defineComponent({
       // Start doing stuff AFTER the MapBox library has fully initialized
       this.mymap.on('load', this.mapIsReady)
       this.mymap.on('move', this.handleMapMotion)
-
-      // clean up display just when we're in thumbnail mode
-      if (this.thumbnail) {
-        let baubles = document.getElementsByClassName(
-          'mapboxgl-ctrl mapboxgl-ctrl-attrib mapboxgl-compact'
-        )
-        for (const elem of baubles) elem.setAttribute('style', 'display: none')
-
-        baubles = document.getElementsByClassName('mapboxgl-ctrl mapboxgl-ctrl-group')
-        for (const elem of baubles) elem.setAttribute('style', 'display: none')
-
-        baubles = document.getElementsByClassName('mapboxgl-ctrl-logo')
-        for (const elem of baubles) elem.setAttribute('style', 'display: none')
-      } else {
-        let baubles = document.getElementsByClassName('mapboxgl-ctrl-logo')
-        for (const elem of baubles) elem.setAttribute('style', 'margin-bottom: 3rem;')
-      }
     },
 
     handleEmptyClick(e: any) {
@@ -507,7 +522,6 @@ const Component = defineComponent({
 
     createSpiderLinks() {
       this.spiderLinkFeatureCollection = { type: 'FeatureCollection', features: [] }
-
       for (const id of Object.keys(this.linkData)) {
         const link: any = this.linkData[id]
 
@@ -660,6 +674,7 @@ const Component = defineComponent({
           type: 'symbol',
           layout: {
             'text-field': labels,
+            'text-font': ['Noto Sans Regular'],
             'text-size': 11,
           },
           paint: this.showCentroids ? {} : { 'text-halo-color': 'white', 'text-halo-width': 2 },
@@ -729,7 +744,7 @@ const Component = defineComponent({
       new maplibregl.Popup({ closeOnClick: true })
         .setLngLat(e.lngLat)
         .setHTML(html)
-        .addTo(this.mymap)
+        .addTo(this.mymap as any)
     },
 
     convertRegionColors(geojson: FeatureCollection) {
@@ -750,7 +765,7 @@ const Component = defineComponent({
       const centroids: FeatureCollection = { type: 'FeatureCollection', features: [] }
 
       for (const feature of this.geojson.features) {
-        const centroid: any = turf.centerOfMass(feature as any)
+        const centroid = this.buildSingleCentroid(feature)
 
         centroid.properties.id = feature.id
 
@@ -787,7 +802,7 @@ const Component = defineComponent({
       let to = 0
 
       // daily
-      if (timePeriod === 'Alle >>') {
+      if (timePeriod === TOTAL_MSG) {
         to = feature.properties.dailyTo
         from = feature.properties.dailyFrom
         return { from, to }
@@ -819,42 +834,71 @@ const Component = defineComponent({
       return { from, to }
     },
 
+    buildSingleCentroid(feature: Feature) {
+      if (!feature.properties) feature.properties = {}
+
+      let centroid: any
+      if (this.vizDetails.centroidColumn) {
+        let c: any = feature.properties[this.vizDetails.centroidColumn]
+        if (!Array.isArray(c)) {
+          c = c.split(',').map((c: any) => parseFloat(c))
+        }
+
+        centroid = {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: c },
+          properties: { id: feature.id },
+          id: feature.id,
+        }
+      } else {
+        centroid = turf.centerOfMass(feature as any)
+        centroid.properties.id = feature.id
+        centroid.id = feature.id
+      }
+
+      return centroid
+    },
+
     buildCentroids(geojson: FeatureCollection) {
       const centroids: FeatureCollection = { type: 'FeatureCollection', features: [] }
 
-      for (const feature of geojson.features) {
-        if (!feature.id) continue
+      try {
+        for (const feature of geojson.features) {
+          if (!feature.id) continue
 
-        const centroid: any = turf.centerOfMass(feature as any)
-        centroid.properties.id = feature.id
-        centroid.id = feature.id
+          if (!feature.properties) feature.properties = {}
 
-        let dailyFrom = Math.round(this.marginals.rowTotal[feature.id])
-        let dailyTo = Math.round(this.marginals.colTotal[feature.id])
+          const centroid = this.buildSingleCentroid(feature)
 
-        if (!dailyFrom) dailyFrom = 0
-        if (!dailyTo) dailyTo = 0
+          let dailyFrom = Math.round(this.marginals.rowTotal[feature.id])
+          let dailyTo = Math.round(this.marginals.colTotal[feature.id])
 
-        centroid.properties.dailyFrom = dailyFrom * this.scaleFactor
-        centroid.properties.dailyTo = dailyTo * this.scaleFactor
+          if (!dailyFrom) dailyFrom = 0
+          if (!dailyTo) dailyTo = 0
 
-        let digits = Math.log10(centroid.properties.dailyFrom)
-        centroid.properties.widthFrom = 6 + digits * 3.5
-        digits = Math.log10(centroid.properties.dailyTo)
-        centroid.properties.widthTo = 6 + digits * 3.5
+          centroid.properties.dailyFrom = dailyFrom * this.scaleFactor
+          centroid.properties.dailyTo = dailyTo * this.scaleFactor
 
-        if (dailyFrom) this.maxZonalTotal = Math.max(this.maxZonalTotal, dailyFrom)
-        if (dailyTo) this.maxZonalTotal = Math.max(this.maxZonalTotal, dailyTo)
+          let digits = Math.log10(centroid.properties.dailyFrom)
+          centroid.properties.widthFrom = 6 + digits * 3.5
+          digits = Math.log10(centroid.properties.dailyTo)
+          centroid.properties.widthTo = 6 + digits * 3.5
 
-        if (!feature.properties) feature.properties = {}
-        feature.properties.dailyFrom = dailyFrom
-        feature.properties.dailyTo = dailyTo
+          if (dailyFrom) this.maxZonalTotal = Math.max(this.maxZonalTotal, dailyFrom)
+          if (dailyTo) this.maxZonalTotal = Math.max(this.maxZonalTotal, dailyTo)
 
-        if (centroid.properties.dailyFrom + centroid.properties.dailyTo > 0) {
-          centroids.features.push(centroid)
-          if (feature.properties) this.centroids[feature.id] = centroid
-          this.updateMapExtent(centroid.geometry.coordinates)
+          if (!feature.properties) feature.properties = {}
+          feature.properties.dailyFrom = dailyFrom
+          feature.properties.dailyTo = dailyTo
+
+          if (centroid.properties.dailyFrom + centroid.properties.dailyTo > 0) {
+            centroids.features.push(centroid)
+            if (feature.properties) this.centroids[feature.id] = centroid
+            this.updateMapExtent(centroid.geometry.coordinates)
+          }
         }
+      } catch (e) {
+        this.$emit('error', 'Error creating centroids, does centroid column exist?')
       }
 
       this.centroidSource = centroids
@@ -949,7 +993,6 @@ const Component = defineComponent({
 
         // Save id somewhere helpful
         if (feature.properties) feature.id = feature.properties[this.idColumn]
-
         try {
           if (feature.geometry.type === 'MultiPolygon') {
             this.convertMultiPolygonCoordinatesToWGS84(feature)
@@ -1061,10 +1104,14 @@ const Component = defineComponent({
         return
       }
 
-      this.csvWorker = new CSVWorker()
-      this.csvWorker.onmessage = (event: MessageEvent) => {
+      const csvWorker = new CSVWorker()
+      csvWorker.onmessage = (event: MessageEvent) => {
         const message = event.data
-        if (message.status) {
+
+        // make sure worker is responsive before we ask it to work
+        if (message.ready) {
+          csvWorker.postMessage({ fileSystem: this.fileSystem, filePath: csvFilename })
+        } else if (message.status) {
           this.loadingText = message.status
         } else if (message.error) {
           this.csvWorker?.terminate()
@@ -1079,12 +1126,10 @@ const Component = defineComponent({
           this.finishedLoadingData(message)
         }
       }
-
-      this.csvWorker.postMessage({ fileSystem: this.fileSystem, filePath: csvFilename })
+      this.csvWorker = csvWorker
     },
 
     async finishedLoadingData(message: any) {
-      console.log(222, 'done') // message)
       this.loadingText = 'Building diagram...'
       this.isFinishedLoading = true
       await this.$nextTick()
@@ -1102,6 +1147,7 @@ const Component = defineComponent({
       this.setMapExtent()
       this.buildSpiderLinks()
       this.setupKeyListeners()
+      this.updateTestData()
       this.loadingText = ''
     },
 
@@ -1257,7 +1303,7 @@ const Component = defineComponent({
     },
 
     changedLineFilter(value: any) {
-      if (value === 'Alle') this.lineFilter = Infinity
+      if (value === TOTAL_MSG) this.lineFilter = Infinity
       else this.lineFilter = value
 
       this.updateSpiderLinks()
@@ -1271,17 +1317,18 @@ const Component = defineComponent({
         return
       }
 
-      const { bearing, longitude, latitude, zoom, pitch } = value
+      const { bearing, center, zoom, pitch } = value
       // sometimes closing a view returns a null map, ignore it!
       if (!zoom) return
 
       try {
+        // don't endless loop
         this.mymap.off('move', this.handleMapMotion)
 
         this.mymap.jumpTo({
-          bearing,
+          center,
           zoom,
-          center: [longitude, latitude],
+          bearing,
           pitch,
         })
         // back on again
@@ -1291,22 +1338,28 @@ const Component = defineComponent({
       }
     },
 
-    '$store.state.colorScheme'() {
+    async '$store.state.colorScheme'() {
       this.isDarkMode = this.$store.state.colorScheme === ColorScheme.DarkMode
       if (!this.mymap) return
 
-      this.mymap.setStyle(globalStore.getters.mapStyle)
+      const style = `${BASE_URL}map-styles/${
+        this.globalState.isDarkMode ? 'dark' : 'positron'
+      }.json`
 
-      this.mymap.on('style.load', () => {
-        this.buildCentroids(this.geojson)
-        this.buildSpiderLinks()
-        this.addGeojsonToMap(this.geojson)
-        // this.setupKeyListeners()
-      })
+      const sleep = (milliseconds: number) => {
+        return new Promise(resolve => setTimeout(resolve, milliseconds))
+      }
+
+      this.mymap.setStyle(style)
+      await sleep(1200)
+      this.buildCentroids(this.geojson)
+      this.buildSpiderLinks()
+      this.addGeojsonToMap(this.geojson)
+      // this.setupKeyListeners()
     },
 
     '$store.state.resizeEvents'() {
-      if (this.mymap) this.mymap.resize()
+      // if (this.mymap) this.mymap.resize()
     },
 
     showTimeRange() {
@@ -1321,10 +1374,12 @@ const Component = defineComponent({
       this.updateCentroidLabels()
     },
   },
+
   async created() {
     this._mapExtentXYXY = [180, 90, -180, -90]
     this._maximum = 0
   },
+
   async mounted() {
     globalStore.commit('setFullScreen', !this.thumbnail)
     this.isDarkMode = this.$store.state.colorScheme === ColorScheme.DarkMode
@@ -1347,7 +1402,10 @@ const Component = defineComponent({
   },
 
   beforeDestroy() {
-    if (this.csvWorker) this.csvWorker.terminate()
+    this.resizer?.disconnect()
+    this.csvWorker?.terminate()
+    //@ts-ignore
+    delete window.__testdata__
   },
 
   destroyed() {
@@ -1423,7 +1481,6 @@ h4 {
   display: flex;
   flex-direction: row;
   user-select: none;
-  background-color: var(--bgMapPanel);
   grid-column: 1 / 3;
 }
 
@@ -1439,27 +1496,26 @@ h4 {
 
 .lower-right {
   position: absolute;
-  bottom: 2rem;
+  bottom: 3rem;
   right: 0.5rem;
   display: flex;
   z-index: 1;
 }
 
 .lower-left {
-  width: 10rem;
+  width: 12rem;
   position: absolute;
-  left: 5px;
-  bottom: 2rem;
-  right: 0.5rem;
+  left: 0.5rem;
+  bottom: 0.5rem;
   display: flex;
   flex-direction: column;
   z-index: 1;
   background-color: var(--bgPanel);
-  opacity: 0.9;
-  filter: $filterShadow;
+  opacity: 0.97;
+  // filter: $filterShadow;
   border: solid 1px rgba(161, 160, 160, 0.781);
   border-radius: 2px;
-  padding-bottom: 0.25rem;
+  padding: 3px 4px;
 }
 
 .complication {

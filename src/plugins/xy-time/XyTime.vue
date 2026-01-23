@@ -1,23 +1,24 @@
 <template lang="pug">
 .viz-plugin(:class="{'hide-thumbnail': !thumbnail}" oncontextmenu="return false" :id="`id-${viewId}`")
 
-  xy-time-deck-map.map-layer(v-if="!thumbnail"
+  xy-time-deck-map.map-layer(v-if="isLoaded && !thumbnail"
     :viewId="viewId"
     :pointLayers="pointLayers"
     :timeFilter="timeFilter"
-    :dark="this.$store.state.isDarkMode"
-    :colors="this.colors"
-    :breakpoints="this.breakpoints"
-    :radius="this.guiConfig.radius"
+    :dark="globalState.isDarkMode"
+    :colors="colors"
+    :breakpoints="breakpoints"
+    :radius="guiConfig.radius"
     :mapIsIndependent="false"
+    :bgLayers="backgroundLayers"
   )
 
-  zoom-buttons(v-if="!thumbnail" corner="bottom")
+  zoom-buttons(v-if="!thumbnail" corner="top-left")
 
   .top-right
     .gui-config(:id="configId")
 
-  .bottom-right
+  .bottom-left
     .legend-area(v-if="legendStore")
       legend-box(:legendStore="legendStore")
 
@@ -34,13 +35,13 @@
   .message(v-if="!thumbnail && myState.statusMessage")
     p.status-message {{ myState.statusMessage }}
 
-  modal-dialog-custom-colorbreakpoint(v-if="this.showCustomBreakpoints"
-    :breakpointsProp="this.breakpoints"
-    :colorsProp="this.colors"
+  modal-dialog-custom-colorbreakpoint(v-if="showCustomBreakpoints"
+    :breakpointsProp="breakpoints"
+    :colorsProp="colors"
     @close="showCustomBreakpoints = false"
-    @updateColor="(colorArray) => this.setLegend(colorArray, this.breakpoints)"
-    @updateBreakpoint="(breakpointArray) => this.setLegend(this.colors, breakpointArray)"
-    @addOrRemoveBreakpoint="(colorArray, breakpointArray) => this.setLegend(colorArray, breakpointArray)"
+    @updateColor="(colorArray) => setLegend(colorArray, breakpoints)"
+    @updateBreakpoint="(breakpointArray) => setLegend(colors, breakpointArray)"
+    @addOrRemoveBreakpoint="(colorArray, breakpointArray) => setLegend(colorArray, breakpointArray)"
   )
 
 </template>
@@ -86,10 +87,11 @@ import HTTPFileSystem from '@/js/HTTPFileSystem'
 import LegendBox from '@/components/viz-configurator/LegendBox.vue'
 import LegendStore from '@/js/LegendStore'
 import TimeSlider from '@/components/TimeSlider.vue'
-import XyTimeDeckMap from './XyTimeDeckMap'
+import XyTimeDeckMap from './XyMapComponent.vue'
 import XytDataParser from './XytDataParser.worker.ts?worker'
 import ZoomButtons from '@/components/ZoomButtons.vue'
 import ModalDialogCustomColorbreakpoint from './ModalDialogCustomColorbreakpoint.vue'
+import BackgroundLayers from '@/js/BackgroundLayers'
 
 import {
   ColorScheme,
@@ -99,7 +101,6 @@ import {
   FileSystemConfig,
   VisualizationPlugin,
   Status,
-  REACT_VIEW_HANDLES,
 } from '@/Globals'
 
 interface VizDetail {
@@ -115,7 +116,7 @@ interface VizDetail {
   exponent: number
   radius: number
   colorRamp: string
-  breakpoints: string
+  breakpoints: number[] | { values: number[]; colors?: any } | null
 }
 
 interface PointLayer {
@@ -147,6 +148,7 @@ const MyComponent = defineComponent({
   },
   data() {
     return {
+      globalState: globalStore.state,
       guiConfig: {
         buckets: 7,
         exponent: 4,
@@ -159,6 +161,9 @@ const MyComponent = defineComponent({
         'Custom breakpoints...': this.toggleModalDialog,
         'manual breaks': '',
       },
+
+      backgroundLayers: null as null | BackgroundLayers,
+
       minRadius: 5,
       maxRadius: 50,
       showCustomBreakpoints: false,
@@ -205,7 +210,7 @@ const MyComponent = defineComponent({
         radius: 5,
         colorRamp: 'viridis',
         flip: false,
-        breakpoints: null as any,
+        breakpoints: null as number[] | { values: number[]; colors?: any } | null,
       } as VizDetail,
       myState: {
         statusMessage: '',
@@ -234,18 +239,27 @@ const MyComponent = defineComponent({
 
     if (this.thumbnail) return
 
-    this.setupLogoMover()
-
     // ----------------------------------------------------
     this.setupGui()
     this.myState.statusMessage = `${this.$i18n.t('loading')}`
 
     if (!this.isLoaded) await this.loadFiles()
+
+    // background layers
+    try {
+      this.backgroundLayers = new BackgroundLayers({
+        vizDetails: this.vizDetails,
+        fileApi: this.fileApi,
+        subfolder: this.subfolder,
+      })
+      await this.backgroundLayers.initialLoad()
+    } catch (e) {
+      this.$emit('error', 'Error loading background layers')
+    }
   },
+
   beforeDestroy() {
-    // MUST erase the React view handle to prevent gigantic memory leak!
-    REACT_VIEW_HANDLES[this.viewId] = undefined
-    delete REACT_VIEW_HANDLES[this.viewId]
+    this.resizer?.disconnect()
 
     try {
       if (this.gzipWorker) {
@@ -281,11 +295,7 @@ const MyComponent = defineComponent({
       return this.thumbnailUrl
     },
   },
-  watch: {
-    '$store.state.viewState'() {
-      if (REACT_VIEW_HANDLES[this.viewId]) REACT_VIEW_HANDLES[this.viewId]()
-    },
-  },
+  watch: {},
   methods: {
     toggleModalDialog() {
       this.showCustomBreakpoints = !this.showCustomBreakpoints
@@ -297,21 +307,6 @@ const MyComponent = defineComponent({
         this.convertSecondsToClockTimeMinutes(timeValues[0]),
         this.convertSecondsToClockTimeMinutes(timeValues[1]),
       ]
-    },
-
-    setupLogoMover() {
-      this.resizer = new ResizeObserver(this.moveLogo)
-      const deckmap = document.getElementById(`id-${this.viewId}`) as HTMLElement
-      this.resizer.observe(deckmap)
-    },
-
-    moveLogo() {
-      const deckmap = document.getElementById(`${this.viewId}`) as HTMLElement
-      const logo = deckmap?.querySelector('.mapboxgl-ctrl-bottom-left') as HTMLElement
-      if (logo) {
-        const right = deckmap.clientWidth > 640 ? '280px' : '36px'
-        logo.style.right = right
-      }
     },
 
     setupGui() {
@@ -347,6 +342,7 @@ const MyComponent = defineComponent({
         this.vizDetails = YAML.parse(text)
       } catch (e) {
         console.error(e)
+        this.$emit('error', '' + e)
       }
     },
 
@@ -432,13 +428,8 @@ const MyComponent = defineComponent({
         this.setVizDetails()
       } catch (err) {
         const e = err as any
-        console.log('failed')
-
-        this.$emit('error', {
-          type: Status.ERROR,
-          msg: `File not found`,
-          desc: `Could not find: ${this.myState.subfolder}/${this.myState.yamlConfig}`,
-        })
+        console.log('failed' + e)
+        this.$emit('error', `File not found: ${this.myState.subfolder}/${this.myState.yamlConfig}`)
       }
     },
 
@@ -574,13 +565,21 @@ const MyComponent = defineComponent({
       console.log('ALL DONE', { totalRows, data: data.range, time: this.timeRange })
       this.myState.statusMessage = ''
       this.timeFilter = [this.timeRange[0], this.timeRange[0] + 3599]
-      this.isLoaded = true
       this.range = data.range
-      // if (!this.timeRange[1]) this.timeRange[1] = 1
       if (this.gzipWorker) this.gzipWorker.terminate()
 
       this.setColors()
-      this.moveLogo()
+
+      const coords = this.pointLayers[0].coordinates
+      const lon = coords[0] + coords[coords.length - 2]
+      const lat = coords[1] + coords[coords.length - 1]
+      this.$store.commit('setMapCamera', {
+        center: [0.5 * lon, 0.5 * lat],
+        zoom: 6,
+        bearing: 0,
+        pitch: 0,
+      })
+      this.isLoaded = true
     },
 
     animate() {
@@ -610,46 +609,101 @@ const MyComponent = defineComponent({
     },
 
     setColors() {
-      const EXPONENT = this.guiConfig.exponent // powerFunction // 4 // log-e? not steep enough
+      const EXPONENT = this.guiConfig.exponent
 
-      let colors256 = colormap({
-        colormap: this.guiConfig['color ramp'],
-        nshades: 256,
-        format: 'rba',
-        alpha: 1,
-      }).map((c: number[]) => [c[0], c[1], c[2]])
+      // === Apply or generate colors ===
+      // If breakpoints contain custom colors, use them.
+      if (
+        this.vizDetails.breakpoints &&
+        typeof this.vizDetails.breakpoints === 'object' &&
+        !Array.isArray(this.vizDetails.breakpoints) &&
+        'colors' in this.vizDetails.breakpoints
+      ) {
+        if (typeof this.vizDetails.breakpoints.colors[0] == 'string') {
+          // Converts the hex colors to rgb color arrays if they are in hex format (e.g. #FF0000)
+          let rgbColors = this.vizDetails.breakpoints.colors.map((c: string) => {
+            const match = c.match(/[A-Za-z0-9]{2}/g)
+            const rgb = match ? match.map(x => parseInt(x, 16)) : [0, 0, 0]
+            return [rgb[0], rgb[1], rgb[2]]
+          })
+          this.colors = [...rgbColors]
+        } else {
+          this.colors = [...this.vizDetails.breakpoints.colors]
+        }
+      } else if (
+        this.config &&
+        this.config.breakpoints &&
+        typeof this.config.breakpoints === 'object' &&
+        !Array.isArray(this.config.breakpoints) &&
+        'colors' in this.config.breakpoints
+      ) {
+        this.colors = this.config.breakpoints.colors
+      } else {
+        // Otherwise, generate colors based on current GUI settings.
+        // const usedColorRamp = this.vizDetails.colorRamp || this.guiConfig['color ramp']
+        const usedColorRamp = this.guiConfig['color ramp']
 
-      if (this.guiConfig.flip) colors256 = colors256.reverse()
+        let colors256 = colormap({
+          colormap: usedColorRamp,
+          nshades: 256,
+          format: 'rba',
+          alpha: 1,
+        }).map((c: any[]) => [c[0], c[1], c[2]])
 
-      const step = 256 / (this.guiConfig.buckets - 1)
-      const colors = []
-      for (let i = 0; i < this.guiConfig.buckets - 1; i++) {
-        colors.push(colors256[Math.round(step * i)])
+        if (this.guiConfig.flip) colors256 = colors256.reverse()
+
+        const step = 256 / (this.guiConfig.buckets - 1)
+        const generatedColors = []
+        for (let i = 0; i < this.guiConfig.buckets - 1; i++) {
+          generatedColors.push(colors256[Math.round(step * i)])
+        }
+        generatedColors.push(colors256[255])
+        this.colors = generatedColors
       }
-      colors.push(colors256[255])
 
-      this.colors = colors
-
-      // figure out min and max
-      const max1 = Math.pow(this.range[1], 1 / EXPONENT)
-      const max2 = (max1 * this.guiConfig['clip max']) / 100.0
-      // const clippedMin = (this.range[1] * this.clipData[0]) / 100.0
-      // console.log({ max1, max2 })
-
-      // Generate breakpoints only if there are not already set
-      if (!this.vizDetails.breakpoints) {
-        const breakpoints = [] as number[]
+      // === Apply or generate breakpoints ===
+      if (this.vizDetails.breakpoints) {
+        if (Array.isArray(this.vizDetails.breakpoints) && this.vizDetails.breakpoints.length > 0) {
+          this.breakpoints = this.vizDetails.breakpoints
+        } else if (
+          typeof this.vizDetails.breakpoints === 'object' &&
+          !Array.isArray(this.vizDetails.breakpoints) &&
+          'values' in this.vizDetails.breakpoints
+        ) {
+          this.breakpoints = this.vizDetails.breakpoints.values as number[]
+          if ('colors' in this.vizDetails.breakpoints) {
+            this.guiConfig.buckets = this.vizDetails.breakpoints.colors.length
+          }
+        }
+      } else if (this.config && this.config.breakpoints) {
+        if (Array.isArray(this.config.breakpoints)) {
+          this.breakpoints = this.config.breakpoints
+        } else if (
+          typeof this.config.breakpoints === 'object' &&
+          !Array.isArray(this.config.breakpoints) &&
+          'values' in this.config.breakpoints
+        ) {
+          this.breakpoints = this.config.breakpoints.values as number[]
+          if ('colors' in this.config.breakpoints) {
+            this.guiConfig.buckets = this.config.breakpoints.colors.length
+          }
+        }
+      } else {
+        // If no custom breakpoints exist, generate new ones.
+        const max1 = Math.pow(this.range[1], 1 / EXPONENT)
+        const max2 = (max1 * this.guiConfig['clip max']) / 100.0
+        const generatedBreakpoints: number[] = []
         for (let i = 1; i < this.guiConfig.buckets; i++) {
           const raw = (max2 * i) / this.guiConfig.buckets
           const breakpoint = Math.pow(raw, EXPONENT)
-          breakpoints.push(breakpoint)
+          generatedBreakpoints.push(breakpoint)
         }
-
-        this.breakpoints = breakpoints
+        this.breakpoints = generatedBreakpoints
       }
 
-      // only update legend if we have the full dataset already
-      if (this.isLoaded) this.setLegend(colors, this.breakpoints)
+      // Update legend if data is fully loaded.
+      // if (this.isLoaded) this.setLegend(this.colors, this.breakpoints)
+      this.setLegend(this.colors, this.breakpoints)
     },
 
     setLegend(colors: any[], breakpoints: number[]) {
@@ -684,7 +738,7 @@ const MyComponent = defineComponent({
         this.$emit('error', {
           type: Status.ERROR,
           msg: `Loading/Parsing Error`,
-          desc: 'Error loading/parsing: ${this.myState.subfolder}/${this.vizDetails.file}',
+          desc: `Error loading/parsing: ${this.myState.subfolder}/${this.vizDetails.file}`,
         })
       }
     },
@@ -768,11 +822,11 @@ export default MyComponent
   pointer-events: none;
 }
 
-.bottom-right {
+.bottom-left {
   position: absolute;
   bottom: 0;
-  right: 0;
-  margin: auto 7px 15rem auto;
+  left: 0;
+  margin: 1rem;
   box-shadow: 0px 0px 5px 3px rgba(128, 128, 128, 0.1);
 }
 

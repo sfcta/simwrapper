@@ -14,9 +14,10 @@ import { defineComponent } from 'vue'
 export default defineComponent({
   name: 'LineFilterSlider',
   props: {
-    initialValue: { type: Number, required: true },
+    initialValue: { required: true },
+    tooltip: { type: Boolean, default: true },
   },
-  data: () => {
+  data: self => {
     return {
       sliderValue: 0,
       options: {
@@ -24,8 +25,8 @@ export default defineComponent({
         indicator: true,
         min: 0,
         max: 100,
-        'tooltip-always': true,
-        tooltip: true,
+        'tooltip-always': self.tooltip,
+        tooltip: self.tooltip,
         data: [
           0,
           1,
@@ -58,7 +59,7 @@ export default defineComponent({
   // VUE LIFECYCLE HOOKS
   mounted() {
     this.options['custom-formatter'] = (val: any) => '' + this.options.data[val]
-    this.sliderValue = this.initialValue
+    this.sliderValue = (Number.isFinite(this.initialValue) ? this.initialValue : 0) as any
     this.sliderValue = this.options.data.includes(this.initialValue)
       ? this.options.data.indexOf(this.initialValue)
       : 0

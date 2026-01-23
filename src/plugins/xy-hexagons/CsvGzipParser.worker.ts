@@ -1,14 +1,11 @@
 /**
  * Load a gzip file, parse its contents and return a set of ArrayBuffers for display.
  */
-import pako from 'pako'
-import Papa from '@simwrapper/papaparse'
-
 import { FileSystemConfig } from '@/Globals'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
-import Coords from '@/js/Coords'
 
-import { findMatchingGlobInFiles } from '@/js/util'
+import { gUnzip, findMatchingGlobInFiles } from '@/js/util'
+import CoordinateWorker from './CoordinateConverter.worker.ts?worker'
 
 // -----------------------------------------------------------
 onmessage = function (e) {
@@ -16,8 +13,15 @@ onmessage = function (e) {
 }
 // -----------------------------------------------------------
 
-interface RowCache {
-  [id: string]: { raw: Float32Array; length: number; coordColumns: number[] }
+export interface NewRowCache {
+  [group: string]: {
+    positions: Float32Array[]
+    length: number[]
+    // column: Uint8Array
+    columnIds: string[]
+    coordColumns: number[]
+    numAggs: number
+  }
 }
 
 interface Aggregations {
@@ -31,9 +35,9 @@ interface Aggregations {
 let allAggregations: Aggregations = {}
 let totalLines = 0
 let proj = 'EPSG:4326'
+let _workers = [] as any[]
 
-const rowCache: RowCache = {}
-const columnLookup: number[] = []
+let fullRowCache: NewRowCache = {}
 
 /**
  * Begin loading the file, and return status updates
@@ -51,22 +55,22 @@ function startLoading(props: {
   proj = props.projection
 
   postMessage({ status: `Loading ${props.filepath}...` })
+
   step1fetchFile(props.filepath, props.fileSystem)
 }
-
-// export type CSVParser = typeof csvParser
 
 // --- helper functions ------------------------------------------------
 
 /**
  * Return the results after processing is complete.
- * @returns RowCache, ColumnLookup
+ * @returns FullRowCache, ColumnLookup
  */
 function postResults() {
-  postMessage(
-    { rowCache, columnLookup },
-    Object.values(rowCache).map(cache => cache.raw.buffer)
-  )
+  const buffers = [] as any
+  Object.values(fullRowCache).forEach(group => {
+    group.positions.forEach(p => buffers.push(p.buffer))
+  })
+  postMessage({ fullRowCache }, buffers)
 }
 
 async function step1fetchFile(filepath: string, fileSystem: FileSystemConfig) {
@@ -91,12 +95,11 @@ async function step1fetchFile(filepath: string, fileSystem: FileSystemConfig) {
     const blob = await httpFileSystem.getFileBlob(expandedFilename)
     if (!blob) throw Error('BLOB IS NULL')
     const buffer = await blob.arrayBuffer()
-    const uint8View = new Uint8Array(buffer)
 
     // this will recursively gunzip until it can gunzip no more:
-    const unzipped = gUnzip(uint8View)
+    const unzipped = await gUnzip(buffer)
 
-    step2examineUnzippedData(unzipped)
+    step2examineUnzippedData(new Uint8Array(unzipped))
   } catch (e) {
     postMessage({ error: 'Error loading: ' + filepath })
     throw Error('LOAD FAIL! ' + filepath)
@@ -109,8 +112,21 @@ function step2examineUnzippedData(unzipped: Uint8Array) {
   // Figure out which columns to save
   const decoder = new TextDecoder()
 
-  const header = decoder.decode(unzipped.subarray(0, 1024)).split('\n')[0]
-  const endOfHeader = header.length
+  let skipLength = 0
+  let header = ''
+  const initialLines = decoder.decode(unzipped.subarray(0, 1024)).split('\n')
+  for (let i = 0; i < 20; i++) {
+    header = initialLines[i]
+    skipLength += header.length
+    if (!header.startsWith('#')) break
+    const epsg = header.indexOf('EPSG')
+    if (epsg > -1) {
+      postMessage({ projection: header.slice(epsg) })
+      proj = header.slice(epsg)
+    }
+  }
+
+  const endOfHeader = skipLength // header.length
 
   const separator =
     header.indexOf(';') > -1
@@ -126,38 +142,57 @@ function step2examineUnzippedData(unzipped: Uint8Array) {
   const startOfData = endOfHeader + 1
   const sections = [] as Uint8Array[]
 
-  let half = Math.floor(unzipped.length / 2)
-  while (half > 0 && unzipped[half] !== 10) {
-    // \n
-    half -= 1
-  }
-
-  // it's possible there is no data in this CSV :eyeroll:
-
-  if (half == 0) {
-    const section1 = unzipped.subarray(startOfData)
-    sections.push(section1)
-  } else {
-    const section1 = unzipped.subarray(startOfData, half)
-    const section2 = unzipped.subarray(half)
-    sections.push(section1)
-    sections.push(section2)
-  }
-
-  // how many lines
+  // how many lines - count the \n chars
   let count = 0
   for (let i = startOfData; i < unzipped.length; i++) if (unzipped[i] === 10) count++
   // might end last line without EOL marker
   if (unzipped[unzipped.length - 1] !== 10) count++
-
   totalLines = count
 
-  // only save the relevant columns to save memory and not die
+  // split into sections if there are more than 1000 lines
+  const SECTIONS = count > 1000 ? 4 : 1
 
+  const splitLocs = [] as number[]
+  for (let i = 1; i < SECTIONS; i++) {
+    let half = Math.floor((unzipped.length / SECTIONS) * i)
+    while (half > 0 && unzipped[half] !== 10) {
+      // \n
+      half -= 1
+    }
+    splitLocs.push(half)
+  }
+  if (!splitLocs.length) splitLocs.push(0)
+
+  // it's also possible there is no data in this CSV :eyeroll:
+  if (splitLocs[0] == 0) {
+    sections.push(unzipped.subarray(startOfData))
+  } else {
+    let start = startOfData
+    for (let i = 0; i < splitLocs.length + 1; i++) {
+      const sect = unzipped.slice(start, splitLocs[i] ?? undefined)
+      sections.push(sect)
+      start = splitLocs[i] + 1
+    }
+  }
+
+  // only save the relevant columns to save memory and not die
   for (const group of Object.keys(allAggregations)) {
     const aggregations = allAggregations[group]
     let i = 0
+    let numAggregations = aggregations.length
+
+    fullRowCache[group] = {
+      // 2x points for x/y coords; each Float32Array is for a unique aggregation
+      positions: [], // Array.from({ length: numAggregations }, () => new Float32Array(2 * totalLines)),
+      // column: new Uint8Array(totalLines * numAggregations),
+      length: [], // totalLines,
+      numAggs: numAggregations,
+      columnIds: [],
+      coordColumns: [],
+    }
+
     for (const agg of aggregations) {
+      numAggregations++
       const xCol = headerColumns.indexOf(agg.x)
       const yCol = headerColumns.indexOf(agg.y)
 
@@ -171,82 +206,87 @@ function step2examineUnzippedData(unzipped: Uint8Array) {
         return
       }
 
-      columnLookup.push(...[xCol, yCol])
-
-      rowCache[`${group}${i}`] = {
-        raw: new Float32Array(count * 2),
-        coordColumns: [xCol, yCol],
-        length: count,
-      }
+      fullRowCache[group].columnIds.push(`${group}${i}`)
+      fullRowCache[group].coordColumns.push(...[xCol, yCol])
+      // incr aggr number
       i++
     }
   }
 
-  step3parseCSVdata(sections)
+  step3parseCSVdata(sections, headerColumns)
 }
 
-function step3parseCSVdata(sections: Uint8Array[]) {
-  let offset = 0
-
-  const decoder = new TextDecoder()
+function step3parseCSVdata(sections: Uint8Array[], headerColumns: string[]) {
+  let numActiveWorkers = sections.length
 
   try {
-    for (const section of sections) {
-      const text = decoder.decode(section)
+    for (let i = 0; i < sections.length; i++) {
+      _workers.push(new CoordinateWorker())
+      _workers[i].onmessage = (m: MessageEvent) => {
+        if (m.data.ready) {
+          _workers[i].postMessage(
+            {
+              id: i,
+              aggregations: allAggregations,
+              projection: proj,
+              header: headerColumns,
+              bytes: sections[i],
+            },
+            [sections[i].buffer]
+          )
+          return
+        }
 
-      Papa.parse(text, {
-        header: false,
-        // preview: 100,
-        skipEmptyLines: true,
-        delimitersToGuess: ['\t', ';', ',', ' '],
-        dynamicTyping: true,
-        step: (results: any, parser: any) => {
-          if (offset % 65536 === 0) {
-            console.log(offset)
-            postMessage({ status: `Processing CSV: ${Math.floor((50.0 * offset) / totalLines)}%` })
+        if (m.data.error) {
+          postMessage({ error: m.data.error })
+          return
+        }
+        if (m.data.status) {
+          postMessage({ status: m.data.status })
+          return
+        }
+        if (m.data.fullRowCache) {
+          // close this worker
+          _workers[m.data.id].terminate()
+          _workers[m.data.id] = m.data.fullRowCache
+          // last worker? post results!
+          numActiveWorkers -= 1
+          if (!numActiveWorkers) {
+            aggregateResults()
           }
-          for (const key of Object.keys(rowCache)) {
-            const wgs84 = Coords.toLngLat(proj, [
-              results.data[rowCache[key].coordColumns[0] as any],
-              results.data[rowCache[key].coordColumns[1] as any],
-            ])
-            rowCache[key].raw.set(wgs84, offset)
-          }
-          offset += 2
-          return results
-        },
-      })
+        }
+      }
     }
   } catch (e) {
     console.log('' + e)
     postMessage({ error: 'ERROR projection coordinates' })
     return
   }
+}
 
-  postMessage({ status: 'Trimming results...' })
-  // now filter zero-cells out: some rows don't have coordinates, and they
-  // will mess up the total calculations
-  for (const key of Object.keys(rowCache)) {
-    // this is dangerous: only works if BOTH the x and the y are zero; otherwise
-    // it will get out of sync and things will look crazy or crash HAHahahAHHAA
-
-    // rowCache[key].raw = rowCache[key].raw.filter(elem => elem !== 0) // filter zeroes
-    rowCache[key].length = rowCache[key].raw.length / 2
+function aggregateResults() {
+  postMessage({ status: 'Merging results...' })
+  // set the array buffers for positions/column values
+  // for all groups and for all workers
+  const groups = Object.keys(fullRowCache)
+  for (const group of groups) {
+    const groupData = fullRowCache[group]
+    for (let agg = 0; agg < groupData.numAggs; agg++) {
+      // figure out length of real data returned by all workers:
+      const totalLength = _workers.reduce((a, w) => a + w[group].length[agg], 0)
+      groupData.positions.push(new Float32Array(2 * totalLength))
+      let offset = 0
+      for (let i = 0; i < _workers.length; i++) {
+        const wData = _workers[i] as NewRowCache
+        const n = wData[group].length[agg]
+        const filledValues = wData[group].positions[agg].slice(0, n * 2)
+        groupData.positions[agg].set(filledValues, offset * 2)
+        offset += n
+      }
+    }
   }
-
+  // all done
   postResults()
 }
 
-/**
- * This recursive function gunzips the buffer. It is recursive because
- * some combinations of subversion, nginx, and various web browsers
- * can single- or double-gzip .gz files on the wire. It's insane but true.
- */
-function gUnzip(buffer: any): Uint8Array {
-  // GZIP always starts with a magic number, hex $1f8b
-  const header = new Uint8Array(buffer.slice(0, 2))
-  if (header[0] === 0x1f && header[1] === 0x8b) {
-    return gUnzip(pako.inflate(buffer))
-  }
-  return buffer
-}
+postMessage({ ready: true })

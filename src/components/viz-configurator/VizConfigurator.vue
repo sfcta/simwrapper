@@ -21,16 +21,10 @@
     .configuration-panels(v-show="showPanels && !showAddDatasets")
       .section-panel
         .actions
-          b-dropdown(v-model="selectedExportAction"
-            aria-role="list" position="is-bottom-left" :close-on-click="true"
-            @change="clickedExport"
-          )
-              template(#trigger="{ active }")
-                b-button.is-small.is-white.export-button()
-                  i.fa.fa-sm.fa-share
-                  | &nbsp;Export
-              b-dropdown-item(value="yaml" aria-role="listitem") Save YAML config
-              b-dropdown-item(value="png" aria-role="listitem") Take screenshot
+          select.select-exporter(name="exporter" v-model="selectedExportAction" @change="clickedExport") hello
+            option(value="" aria-role="menu") EXPORT...
+            option(value="yaml" aria-role="listitem") Save YAML config
+            option(value="png" aria-role="listitem") Take screenshot
 
           b-button.is-small.is-white.export-button(@click="clickedAddData")
             i.fa.fa-sm.fa-plus
@@ -43,15 +37,17 @@
           component(v-if="section.component"
             :is="section.component"
             :vizConfiguration="vizConfiguration"
+            :vizDetails="vizDetails"
             :datasets="datasets"
+            :subfolder="subfolder"
             @update="handleConfigChanged")
           p(v-else) To be added
 
-    .legend-area
-      legend-box.legend-panel(
-        v-show="showLegend"
-        :legendStore="legendStore"
-      )
+    //- .legend-area
+    //-   legend-box.legend-panel(
+    //-     v-show="showLegend"
+    //-     :legendStore="legendStore"
+    //-   )
 
   add-datasets-panel(v-if="showAddDatasets"
     :vizConfiguration="vizConfiguration"
@@ -79,6 +75,7 @@ import LineColorPanel from './LineColors.vue'
 import FillColorPanel from './FillColors.vue'
 import FillHeightPanel from './FillHeight.vue'
 import LineWidthPanel from './LineWidths.vue'
+import LayersPanel from './Layers.vue'
 import CircleRadiusPanel from './CircleRadius.vue'
 import FiltersPanel from './Filters.vue'
 import { FileSystemConfig } from '@/Globals'
@@ -96,6 +93,7 @@ export default defineComponent({
     LineColorPanel,
     LineWidthPanel,
     FiltersPanel,
+    LayersPanel,
   },
 
   props: {
@@ -113,7 +111,7 @@ export default defineComponent({
   data: () => {
     return {
       showPanels: false,
-      showLegend: false,
+      showLegend: true,
       activeSection: '',
       showAddDatasets: false,
       selectedExportAction: '',
@@ -145,6 +143,7 @@ export default defineComponent({
         datasets: this.vizDetails.datasets,
         display: this.vizDetails.display,
         filters: this.vizDetails.filters,
+        backgroundLayers: this.vizDetails.backgroundLayers || {},
       }
     },
 
@@ -174,6 +173,7 @@ export default defineComponent({
     },
 
     clickedLegendShowHide() {
+      this.$emit('toggleLegend')
       this.showLegend = !this.showLegend
     },
 
@@ -192,7 +192,7 @@ export default defineComponent({
       this.showAddDatasets = true
     },
 
-    async clickedExport() {
+    async clickedExport(event: any) {
       await this.$nextTick()
       if (this.selectedExportAction == 'yaml') {
         this.exportYaml()
@@ -219,16 +219,17 @@ export default defineComponent({
 
       // make a copy so we don't screw up the viz when we edit, and also
       // to put things in a specific order every time:
+      const center = this.$store.state.viewState.center || [
+        this.$store.state.viewState.longitude,
+        this.$store.state.viewState.latitude,
+      ]
       const config = {
         title: this.vizDetails.title,
         description: this.vizDetails.description,
         zoom: Math.round(10 * this.$store.state.viewState.zoom) / 10,
         pitch: Math.round(this.$store.state.viewState.pitch),
         bearing: Math.round(this.$store.state.viewState.bearing),
-        center: [
-          Math.round(100 * this.$store.state.viewState.center[0]) / 100,
-          Math.round(100 * this.$store.state.viewState.center[1]) / 100,
-        ],
+        center: [Math.round(100 * center[0]) / 100, Math.round(100 * center[1]) / 100],
         network: this.vizDetails.network || this.vizDetails.geojsonFile,
         projection: this.vizDetails.projection,
         showDifferences: this.vizDetails.showDifferences,
@@ -237,7 +238,15 @@ export default defineComponent({
         datasets: { ...this.vizDetails.datasets },
         display: { ...this.vizDetails.display },
         filters: {},
+        backgroundLayers: this.vizDetails.backgroundLayers || {},
       } as any
+
+      // remove bgLayer titles
+      for (const id of Object.keys(config.backgroundLayers)) {
+        const layer = config.backgroundLayers[id]
+        delete layer.title
+        if (layer.label === '') delete layer.label
+      }
 
       // define shapefile join column, if we have one
       if (typeof this.vizDetails.shapes === 'object' && this.vizDetails.shapes.join) {
@@ -426,18 +435,17 @@ h1:hover {
   user-select: none;
   border-radius: 3px;
   pointer-events: auto;
-  margin: 0 0.5rem 2rem 0;
+  margin: 0 0.5rem 0rem 0;
   filter: $filterShadow;
   z-index: 10;
 }
 
 .map-actions {
-  pointer-events: all;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  margin-top: 72px;
-  margin-right: 0px;
+  margin: 72px 0px auto 0px;
+  pointer-events: auto;
   z-index: 5;
 }
 
@@ -515,6 +523,26 @@ h1:hover {
 .right-panels {
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: 10;
+  pointer-events: none;
+  gap: 2rem;
+}
+
+.select-exporter {
+  width: 5rem;
+  font-size: 0.8rem;
+  font-weight: bold;
+  padding: 0.25rem 0.25rem;
+  margin: auto 0;
+  text-align: right;
+  color: var(--link);
+}
+
+.select-exporter:hover {
+  color: var(--linkHover);
+  background-color: var(--bgCream4);
 }
 
 @media only screen and (max-width: 640px) {

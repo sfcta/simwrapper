@@ -9,7 +9,7 @@
     .hint-clicks(style="margin-bottom: 1rem; opacity: 1")
         p Connect to SimWrapper cloud resources here.
 
-    h3(style="margin-top: 1rem") Connected resources
+    h3(style="margin-top: 1rem") Servers
 
     .curate-content
       .folder-table
@@ -24,7 +24,7 @@
           )
 
     .connect-here
-      h3(@click="showAddResource=!showAddResource" style="margin-top: 1rem") Add new connection
+      h3(@click="showAddResource=!showAddResource" style="margin-top: 1rem") Add new server
         i.fa(style="float: right"
           :class="{'fa-times': showAddResource, 'fa-arrow-up': !showAddResource}"
         )
@@ -196,7 +196,6 @@ export default defineComponent({
 .panel {
   display: flex;
   flex-direction: column;
-  height: 100%;
   padding-top: 0.25rem;
   user-select: none;
   font-size: 0.9rem;

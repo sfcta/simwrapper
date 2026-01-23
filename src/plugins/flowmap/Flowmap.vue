@@ -1,65 +1,132 @@
 <template lang="pug">
-.flowmap(:class="{'hide-thumbnail': !thumbnail}"
-        :style='{"background": urlThumbnail}'
-        oncontextmenu="return false")
+  .flowmap-page
+    .flowmap(:class="{'hide-thumbnail': !thumbnail}"
+            :style='{"background": urlThumbnail}'
+            oncontextmenu="return false")
 
-    .map-layout
-       flow-map-layer.map-layer(v-if="centroids.length"
-        :viewId="viewId"
-        :props="mapProps"
-        )
+        .map-layout
+          flow-map-layer.map-layer(v-if="centroids.length"
+            v-bind="mapProps"
+          )
 
+        zoom-buttons(corner="top-left")
 
-    .title-panel(v-if="vizDetails.title && !thumbnail && !configFromDashboard")
-      h3 {{ vizDetails.title }}
-      p {{ vizDetails.description }}
+        .bottom-panel(v-if="hasHours")
+          h1 {{`Hours ${slider.filterStartHour} - ${slider.filterEndHour}` }}
+          .button-row
+            time-slider.time-slider(v-if="isLoaded"
+            :numHours="numHours"
+            :hourlyTotals="hourlyTotals"
+            :initial="[0, getMaxHour()]"
+            :labels="labels"
+            :isDarkMode="isDarkMode"
+            @hourSelected="filterByHour"
+          )
+    .right-side-panel
+      .metric-label Metrics
+      .metric-buttons
+        button.button.is-small.metric-button(
+          v-for="metric,i in vizDetails.metrics" :key="i"
+          @click="handleClickedMetric(metric)"
+          ) {{metric.label}}
+      br
+      .metric-label Color scheme
+      b-select.form-select.is-small(
+        v-model="vizDetails.colorScheme"
+        @input="vizDetails = {...vizDetails}"
+      )
+        option(value="Blues") Blues
+        option(value="BluGrn") BluGrn
+        option(value="BluYl") BluYl
+        option(value="BrwnYl") BrwnYl
+        option(value="BuGn") BuGn
+        option(value="BuPu") BuPu
+        option(value="Burg") Burg
+        option(value="BurgYl") BurgYl
+        option(value="Cool") Cool
+        option(value="DarkMint") DarkMint
+        option(value="Emrld") Emrld
+        option(value="GnBu") GnBu
+        option(value="Grayish") Grayish
+        option(value="Greens") Greens
+        option(value="Greys") Greys
+        option(value="Inferno") Inferno
+        option(value="Magenta") Magenta
+        option(value="Magma") Magma
+        option(value="Mint") Mint
+        option(value="Oranges") Oranges
+        option(value="OrRd") OrRd
+        option(value="OrYel") OrYel
+        option(value="Peach") Peach
+        option(value="Plasma") Plasma
+        option(value="PinkYl") PinkYl
+        option(value="PuBu") PuBu
+        option(value="PuBuGn") PuBuGn
+        option(value="PuRd") PuRd
+        option(value="Purp") Purp
+        option(value="Purples") Purples
+        option(value="PurpOr") PurpOr
+        option(value="RdPu") RdPu
+        option(value="RedOr") RedOr
+        option(value="Reds") Reds
+        option(value="Sunset") Sunset
+        option(value="SunsetDark") SunsetDark
+        option(value="Teal") Teal
+        option(value="TealGrn") TealGrn
+        option(value="Viridis") Viridis
+        option(value="Warm") Warm
+        option(value="YlGn") YlGn
+        option(value="YlGnBu") YlGnBu
+        option(value="YlOrBr") YlOrBr
+        option(value="YlOrRd") YlOrRd
 
-    zoom-buttons(v-if="!thumbnail")
-
-    .bottom-panel(v-if="!thumbnail")
-
-        b-checkbox.hello(
-              v-model="vizDetails.animationEnabled"
-            )
+      br
+      b-checkbox.tight(v-model="vizDetails.animationEnabled")
         p Animation
-
-        b-checkbox.hello(
-              v-model="vizDetails.locationLabelsEnabled"
-            )
-        p Labels
-
-        b-checkbox.hello(
-              v-model="vizDetails.clustering"
-            )
+      br
+      b-checkbox.tight(v-model="vizDetails.clustering")
         p Clustering
-
 </template>
 
 <script lang="ts">
 import { defineComponent } from 'vue'
 import type { PropType } from 'vue'
+import * as Turf from '@turf/turf'
+import YAML from 'yaml'
 
-import * as turf from '@turf/turf'
-import VizConfigurator from '@/components/viz-configurator/VizConfigurator.vue'
+import globalStore from '@/store'
+import { FileSystemConfig } from '@/Globals'
+import NewXmlFetcher from '@/workers/NewXmlFetcher.worker?worker'
 import ZoomButtons from '@/components/ZoomButtons.vue'
-
-import { FileSystemConfig, REACT_VIEW_HANDLES, VisualizationPlugin } from '@/Globals'
-import FlowMapLayer from '@/layers/FlowMapLayer'
+import FlowMapLayer from '@/plugins/flowmap/FlowmapDeckMapComponent.vue'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
 import DashboardDataManager from '@/js/DashboardDataManager'
-import globalStore from '@/store'
-import YAML from 'yaml'
 import util from '@/js/util'
+import TimeSlider from '@/plugins/flowmap/FlowMapTimeSlider.vue'
+import Coords from '@/js/Coords'
+import BackgroundLayers from '@/js/BackgroundLayers'
+
+interface Label {
+  leftPct: string
+  rightPct: string
+  top: string
+  text: string
+}
+
+interface Flow {
+  o: string // origin
+  d: string // destination
+  v: number
+  h: number
+}
 
 const MyComponent = defineComponent({
   name: 'FlowMap',
-  components: { FlowMapLayer, VizConfigurator, ZoomButtons },
+  components: { FlowMapLayer, ZoomButtons, TimeSlider },
   // i18n,
   props: {
     config: Object,
     datamanager: { type: Object as PropType<DashboardDataManager> },
-    fileSystemConfig: { type: Object as PropType<FileSystemConfig>, required: true },
-    files: { type: Array, required: true },
     root: { type: String, required: true },
     subfolder: { type: String, required: true },
     thumbnail: Boolean,
@@ -82,13 +149,17 @@ const MyComponent = defineComponent({
       return svnProject[0]
     },
 
-    mapProps(): any {
+    mapProps() {
       return {
+        viewId: this.viewId,
+        bgLayers: this.backgroundLayers,
         locations: this.centroids,
-        flows: this.flows,
+        flows: this.filteredFlows,
         dark: this.$store.state.isDarkMode,
         elapsed: this.elapsed,
         vizDetails: this.vizDetails,
+        slider: this.slider,
+        mapIsIndependent: false,
       }
     },
 
@@ -98,22 +169,39 @@ const MyComponent = defineComponent({
   },
 
   watch: {
-    '$store.state.viewState'() {
-      if (!REACT_VIEW_HANDLES[this.viewId]) return
-      REACT_VIEW_HANDLES[this.viewId]()
+    '$store.state.isDarkMode'() {
+      this.isDarkMode = this.$store.state.isDarkMode
+    },
+
+    vizDetails: function (val) {
+      console.log('color changed')
+      this.vizDetails = val
     },
   },
 
   data() {
     return {
-      boundaries: [] as any[],
+      isLoaded: false,
+      hasHours: true,
+      stopFacilities: {} as {
+        attributes?: any
+        transitStops?: any
+        [key: string]: any // Allows any additional properties in case transitSchedule changes
+      },
       centroids: [] as any[],
-      flows: [] as any[],
+      flows: [] as Flow[],
+      filteredFlows: [] as Flow[],
       viewId: Math.floor(1e12 * Math.random()),
       statusText: 'Loading...',
       needsInitialMapExtent: true,
       myDataManager: this.datamanager || new DashboardDataManager(this.root, this.subfolder),
       thumbnailUrl: "url('assets/thumbnail.jpg') no-repeat;",
+
+      backgroundLayers: null as BackgroundLayers | null,
+
+      resolvers: {} as { [id: number]: any },
+      resolverId: 0,
+      _roadFetcher: {} as any,
 
       startTime: Date.now(),
       elapsed: 0,
@@ -127,29 +215,79 @@ const MyComponent = defineComponent({
         thumbnail: false,
       },
 
+      crs: '',
+
+      hourlyTotals: {
+        headwayPerHour: new Float32Array(0),
+      },
+      hours: [] as number[],
+      labels: [] as Label[],
+      numHours: 0,
+      selectedHour: 0,
+      datasets: [] as string[],
+      isDarkMode: this.$store.state.isDarkMode,
+
+      slider: {
+        map: {} as any,
+        isLoaded: false,
+        population: [] as any[],
+        numInfections: 0,
+        coordinates: new Float64Array(1),
+        deckOverlay: {} as any,
+        startDate: '',
+        // largestNumDailyInfections: 0,
+        filterStartHour: 0,
+        filterEndHour: 24,
+        filteredFlows: [] as any,
+        labels: ['', ''],
+        csvStreamer: null as any,
+        useMeters: true,
+        radiusSlider: 250,
+        range: [20, 1000],
+        path: '',
+        updating: true,
+      },
+
       vizDetails: {
-        title: '',
+        title: 'test',
         description: '',
         thumbnail: '',
-        zoom: 9,
+        zoom: 9.5,
         center: null as any | null,
         pitch: 0,
         bearing: 0,
+        stopFacilitiesFile: '',
+        network: '',
+        dataset: '',
+        colorScheme: '',
+        loadTransit: false,
+        metrics: [
+          {
+            label: '',
+            dataset: '',
+            origin: '',
+            destination: '',
+            flow: '',
+            transformValue: '' as any,
+            colorScheme: '',
+          },
+        ],
+        // these are deprecated, should now be in metrics[] instead:
         boundaries: '',
         boundariesJoinCol: '',
-        boundariesLabels: '',
-        boundariesLabel: '',
-        dataset: '',
         origin: '',
         destination: '',
         flow: '',
-        colorScheme: 'Teal',
+        // metrics
+        selectedMetric: {},
+        selectedMetricLabel: '',
         highlightColor: 'orange',
         fadeEnabled: true,
         fadeAmount: 50,
         animationEnabled: true,
         clustering: true,
         clusteringLevel: null as number | null,
+        clusteringEnabled: true,
         locationLabelsEnabled: true,
         locationTotalsEnabled: true,
         pickable: true,
@@ -168,16 +306,17 @@ const MyComponent = defineComponent({
 
       this.myState.thumbnail = this.thumbnail
 
+      // fixed issue of undefined loading on staging
+      this.myState.subfolder = this.subfolder
+
       // DataManager might be passed in from the dashboard; or we might be
       // in single-view mode, in which case we need to create one for ourselves
       this.myDataManager = this.datamanager || new DashboardDataManager(this.root, this.subfolder)
+      this._roadFetcher = new NewXmlFetcher()
 
       await this.getVizDetails()
 
-      if (this.thumbnail) {
-        this.buildThumbnail()
-        return
-      }
+      if (this.vizDetails.title) this.$emit('title', this.vizDetails.title)
 
       if (this.needsInitialMapExtent && (this.vizDetails.center || this.vizDetails.zoom)) {
         this.$store.commit('setMapCamera', {
@@ -195,11 +334,43 @@ const MyComponent = defineComponent({
       // the spinner when things are finished.  MUST be in this order
       // or the flowmap gets sad if dataset loads faster than boundaries do.
       await this.loadBoundaries()
-      await this.loadDataset()
+
+      // old configs don't have "metrics" section:
+      if (!this.vizDetails.metrics) {
+        this.vizDetails.metrics = [
+          {
+            dataset: this.vizDetails.dataset,
+            origin: this.vizDetails.origin,
+            destination: this.vizDetails.destination,
+            flow: this.vizDetails.flow,
+            label: this.vizDetails.flow,
+            colorScheme: 'Warm',
+          } as any,
+        ]
+      }
+
+      this.vizDetails = Object.assign({}, this.vizDetails)
+      this.vizDetails.selectedMetricLabel = this.vizDetails.metrics[0].flow
+      this.vizDetails.selectedMetric = this.vizDetails.metrics[0]
+      this.slider.labels = ['test', 'test']
+      this.slider = Object.assign({}, this.slider)
+
+      await this.configureData(this.vizDetails.metrics[0])
+
+      // background layers
+      try {
+        this.backgroundLayers = new BackgroundLayers({
+          vizDetails: this.vizDetails,
+          fileApi: this.fileApi,
+          subfolder: this.subfolder,
+        })
+        await this.backgroundLayers.initialLoad()
+      } catch (e) {
+        this.$emit('error', 'Error loading background layers')
+      }
 
       this.$emit('isLoaded')
 
-      this.vizDetails = Object.assign({}, this.vizDetails)
       this.statusText = ''
     } catch (e) {
       this.$emit('error', 'Flowmap' + e)
@@ -207,10 +378,9 @@ const MyComponent = defineComponent({
   },
 
   beforeDestroy() {
-    if (this.animator) window.cancelAnimationFrame(this.animator)
+    if (this._roadFetcher) this._roadFetcher.terminate()
 
-    // MUST delete the React view handle to prevent gigantic memory leak!
-    delete REACT_VIEW_HANDLES[this.viewId]
+    if (this.animator) window.cancelAnimationFrame(this.animator)
   },
 
   methods: {
@@ -218,7 +388,8 @@ const MyComponent = defineComponent({
       // Config was passed in from dashboard:
       if (this.configFromDashboard) {
         console.log('we have a dashboard')
-        this.validateYAML()
+        // this.validateYAML()
+        console.log(this.configFromDashboard)
         this.vizDetails = Object.assign({}, this.configFromDashboard) as any
         return
       }
@@ -233,6 +404,7 @@ const MyComponent = defineComponent({
     },
 
     async buildThumbnail() {
+      console.log(this.myState.fileApi)
       if (!this.myState.fileApi) return
       if (this.thumbnail && this.vizDetails.thumbnail) {
         try {
@@ -249,7 +421,13 @@ const MyComponent = defineComponent({
       }
     },
 
-    async validateYAML() {},
+    // async validateYAML() { },
+
+    handleClickedMetric(metric: string) {
+      this.vizDetails.selectedMetric = metric
+
+      this.configureData(metric)
+    },
 
     async loadStandaloneYAMLConfig() {
       if (!this.fileApi) return {}
@@ -282,21 +460,136 @@ const MyComponent = defineComponent({
       }
     },
 
-    async loadBoundaries() {
-      try {
-        if (this.vizDetails.boundaries.startsWith('http')) {
-          console.log('in http')
-          const boundaries = await fetch(this.vizDetails.boundaries).then(async r => await r.json())
-          this.boundaries = boundaries.features
-        } else {
-          const filepath = `${this.subfolder}/${this.vizDetails.boundaries}`
-          const boundaries = await this.fileApi.getFileJson(
-            `${this.subfolder}/${this.vizDetails.boundaries}`
-          )
+    fetchXML(props: { worker: any; slug: string; filePath: string; options?: any }) {
+      let xmlWorker = props.worker
 
-          this.boundaries = boundaries.features
+      xmlWorker.onmessage = (message: MessageEvent) => {
+        // message.data will have .id and either .error or .xml
+        const { resolve, reject } = this.resolvers[message.data.id]
+
+        xmlWorker.terminate()
+
+        if (message.data.error) reject(message.data.error)
+        resolve(message.data.xml)
+      }
+
+      // save the promise by id so we can look it up when we get messages
+      const id = this.resolverId++
+
+      xmlWorker.postMessage({
+        id,
+        fileSystem: this.fileSystem,
+        filePath: props.filePath,
+        options: props.options,
+      })
+
+      const promise = new Promise((resolve, reject) => {
+        this.resolvers[id] = { resolve, reject }
+      })
+      return promise
+    },
+
+    setupHourlyTotals() {
+      this.numHours = this.getMaxHour()
+
+      this.slider.filterStartHour = 0
+      this.slider.filterEndHour = this.numHours
+
+      this.hourlyTotals = {
+        headwayPerHour: new Float32Array(this.numHours + 1),
+      }
+
+      this.flows.forEach(inf => {
+        this.hourlyTotals.headwayPerHour[inf.h] += 1
+      })
+
+      // day labels
+      const firstHour = '00:00'
+      const lastHour = this.numHours + ':00'
+
+      this.labels.push({ leftPct: '0', rightPct: 'auto', top: '2px', text: firstHour.toString() })
+      this.labels.push({ leftPct: 'auto', rightPct: '0', top: '2px', text: lastHour.toString() })
+
+      // if (this.labels[this.labels.length - 1].leftPct > 96.5) {
+      //   this.labels[this.labels.length - 1].leftPct = 93
+      // }
+    },
+
+    getMaxHour() {
+      if (this.flows) {
+        return this.flows.reduce(
+          (maxHour, flow) => (flow.h > maxHour ? flow.h : maxHour),
+          this.flows[0].h
+        )
+      } else {
+        return 0
+      }
+    },
+
+    async loadBoundaries() {
+      // transit mode: load transit schedule to determine point locations
+      if (this.vizDetails.loadTransit) {
+        await this.loadTransitBoundaries()
+        return
+      }
+
+      // normal mode: user supplies us a geojson
+      await this.loadGeojsonBoundaries()
+    },
+
+    async loadGeojsonBoundaries() {
+      const fullPath = `${this.subfolder}/${this.vizDetails.boundaries}`
+      const json = await this.fileApi.getFileJson(fullPath)
+      // this.myDataManager.registerFeatures(fullPath, json.features, {})
+      this.stopFacilities = json.features
+      for (const feature of json.features) {
+        try {
+          const centroid = Turf.centerOfMass(feature)
+          this.centroids.push({
+            id: `${
+              feature.properties[
+                this.vizDetails.boundariesJoinCol || feature.id || feature.properties.id
+              ]
+            }`,
+            lon: centroid?.geometry?.coordinates[0] || 0,
+            lat: centroid?.geometry?.coordinates[1] || 0,
+          })
+        } catch (e) {
+          console.warn('skipping feature:', feature)
+        }
+      }
+      this.setMapCenter()
+    },
+
+    async loadTransitBoundaries() {
+      let results: any = {}
+      try {
+        const { files } = await this.fileApi.getDirectory(this.myState.subfolder)
+        const transitSchedule = files.filter(
+          f => f.endsWith('transitSchedule.xml.gz') && !f.startsWith('._')
+        )
+        this.stopFacilities = transitSchedule
+
+        if (!transitSchedule) {
+          console.error('no transit schedule found.')
+          this.vizDetails.stopFacilitiesFile = ''
+        } else {
+          this.vizDetails.stopFacilitiesFile = transitSchedule[0]
+          results = await this.fetchXML({
+            worker: this._roadFetcher,
+            slug: this.fileSystem.slug,
+            filePath: this.myState.subfolder + '/' + this.vizDetails.stopFacilitiesFile,
+            options: { attributeNamePrefix: '' },
+          })
+
+          if (results && results.transitSchedule) {
+            this.stopFacilities = results.transitSchedule
+          } else {
+            console.error("fetched xml didn't have transit schedule")
+          }
         }
       } catch (e) {
+        this.$emit('error', 'Boundaries: ' + e)
         console.error(e)
         return
       }
@@ -304,27 +597,52 @@ const MyComponent = defineComponent({
       this.setMapCenter()
     },
 
-    calculateCentroids() {
-      const boundaryLabelField = this.vizDetails.boundariesLabels || this.vizDetails.boundariesLabel
-      for (const feature of this.boundaries) {
-        const centroid: any = turf.centerOfMass(feature as any)
-
-        if (feature.properties[boundaryLabelField]) {
-          centroid.properties.label = feature.properties[boundaryLabelField]
+    filterByHour(hour: number) {
+      let filterFlows = this.flows.reduce((acc: any, flow) => {
+        if (flow.h == hour) {
+          acc.push(flow)
         }
-        centroid.properties.id = '' + feature.properties[this.vizDetails.boundariesJoinCol]
+        return acc
+      }, [])
 
-        this.centroids.push({
-          id: `${centroid.properties.id}`,
-          lon: centroid.geometry.coordinates[0],
-          lat: centroid.geometry.coordinates[1],
-        })
-      }
-      console.log({ centroids: this.centroids })
-      // for (const c of this.centroids) console.log(`${c.id},${c.lon},${c.lat}`)
+      this.filteredFlows = filterFlows
     },
 
-    async setMapCenter() {
+    calculateCentroids() {
+      // const boundaryLabelField = this.vizDetails.boundariesLabels || this.vizDetails.boundariesLabel
+      if (this.stopFacilities !== undefined) {
+        // try to get crs from attributes
+        if (
+          this.stopFacilities?.attributes &&
+          this.stopFacilities?.attributes?.attribute?.name === 'coordinateReferenceSystem'
+        ) {
+          this.crs = this.stopFacilities?.attributes?.attribute?.['#text']
+          console.log(this.crs)
+        } else {
+          console.log('no crs found in transit schedule, reverting to WGS 84')
+          this.crs = 'EPSG:4326'
+        }
+
+        for (const facility of this.stopFacilities.transitStops.stopFacility) {
+          // Convert the location data
+          // don't hard code CRS
+          const [lon, lat] = Coords.toLngLat(this.crs, [
+            parseFloat(facility.x),
+            parseFloat(facility.y),
+          ])
+
+          this.centroids.push({
+            id: facility.id,
+            lon: lon,
+            lat: lat,
+          })
+        }
+      } else {
+        console.error('transit schedule from xml is undefined.')
+      }
+    },
+
+    setMapCenter() {
       // If user gave us the center, use it
       if (this.vizDetails.center) {
         if (typeof this.vizDetails.center == 'string') {
@@ -375,37 +693,58 @@ const MyComponent = defineComponent({
       }
     },
 
-    async loadDataset() {
+    async configureData(datasetInfo: any) {
+      // Use config columns for origin/dest/flow -- if they exist
+      this.vizDetails.colorScheme = datasetInfo.colorScheme
+      this.vizDetails.selectedMetricLabel = datasetInfo.flow
+
+      const oColumn = datasetInfo.origin || 'origin'
+      const dColumn = datasetInfo.destination || 'destination'
+      const flowColumn = datasetInfo.flow || 'flow'
+      const hourColumn = datasetInfo.hour || 'departureHour'
+
       try {
-        const dataset = await this.myDataManager.getDataset(this.vizDetails)
+        this.vizDetails.dataset = datasetInfo.dataset
+        const dataset = await this.myDataManager.getDataset(this.vizDetails, {
+          subfolder: this.subfolder,
+        })
         // this.datamanager.addFilterListener(this.config, this.handleFilterChanged)
-        console.log('dataset:', dataset)
 
         const data = dataset.allRows || ({} as any)
-        console.log('data:', data)
+        if (!(oColumn in data)) this.$emit('error', `Column ${oColumn} not found`)
+        if (!(dColumn in data)) this.$emit('error', `Column ${dColumn} not found`)
+        if (!(flowColumn in data)) this.$emit('error', `Column ${flowColumn} not found`)
 
-        // assumes flow data has "origin,destination,count" columns
-        const origin = data.origin.values
-        const destination = data.destination.values
-        const count = data.count.values
+        const origin = data[oColumn].values
+        const destination = data[dColumn].values
+        const count = data[flowColumn].values
 
-        console.log('in loadDataset')
+        this.hasHours = hourColumn in data
+        const hours = this.hasHours ? data[hourColumn].values : null
 
         const flows = [] as any[]
+        const invert = 'inverse' == datasetInfo.valueTransform?.enum?.[0]
         for (let i = 0; i < origin.length; i++) {
-          flows.push({
-            o: `${origin[i]}`,
-            d: `${destination[i]}`,
-            v: count[i],
-          })
+          try {
+            flows.push({
+              o: `${origin[i]}`,
+              d: `${destination[i]}`,
+              v: invert ? 1 / count[i] : count[i],
+              h: this.hasHours ? hours[i] : 0,
+            })
+          } catch {
+            // missing data; ignore
+          }
         }
         this.flows = flows
+        this.filteredFlows = this.flows
+        if (this.hasHours) this.setupHourlyTotals()
+        this.isLoaded = true
       } catch (e) {
-        const message = '' + e
-        console.log(message)
+        console.log('' + e)
         this.flows = []
+        this.$emit('error', '' + e)
       }
-      console.log({ flows: this.flows })
     },
   },
 })
@@ -417,21 +756,69 @@ export default MyComponent
 @import '@/styles.scss';
 
 .flowmap {
-  position: absolute;
+  position: relative;
   top: 0;
   bottom: 0;
   left: 0;
   right: 0;
-  display: flex;
-  flex-direction: column;
+  // display: flex;
+  flex: 8;
   min-height: $thumbnailHeight;
-  background: url('assets/thumbnail.jpg') center / cover no-repeat;
-  z-index: -1;
+}
+
+.deck-map {
+  width: 100%;
+  display: flex;
+  flex-direction: row !important;
+  height: 100%;
 }
 
 .flowmap.hide-thumbnail {
   background: none;
   z-index: 0;
+}
+
+.metric-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: max-content;
+  margin: 0.25rem 0.5rem 0.5rem 0;
+}
+
+.metric-button {
+  border-radius: 0;
+  width: 100%;
+  flex: 1;
+  color: var(--text);
+  background-color: var(--bgDashboard);
+}
+
+.metric-button:hover {
+  background-color: #fff !important;
+  color: #000 !important;
+}
+
+.metric-label {
+  font-weight: bold;
+  font-size: 1.3rem;
+}
+
+.button-row {
+  grid-row: 1 / 2;
+  grid-column: 1 / 2;
+  // display: flex;
+  flex-direction: row;
+  margin-bottom: 0.5rem;
+  color: white;
+
+  p {
+    font-size: 1.1rem;
+  }
+}
+
+.time-slider {
+  color: #000;
 }
 
 .map-layout {
@@ -454,20 +841,56 @@ export default MyComponent
   z-index: 2;
 }
 
-.bottom-panel {
-  grid-column: 1 / 3;
-  grid-row: 2 / 3;
+.map-layout {
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+.map-complications {
   display: flex;
-  flex-direction: row;
+  position: absolute;
+}
+
+.right-side-panel {
+  flex: 1;
+  padding-left: 15px;
+
+  p:hover {
+    font-weight: bold !important;
+    color: #c6c1b9;
+  }
+
+  .b-checkbox.checkbox:not(.button):hover {
+    font-weight: bold !important;
+    color: #c6c1b9;
+  }
+}
+
+.bottom-panel {
+  position: absolute;
+  bottom: 0.25rem;
+  left: 0.25rem;
   font-size: 0.8rem;
+  width: 50%;
   pointer-events: auto;
-  margin: auto auto 0rem 0rem;
-  padding: 0.25rem;
+  padding: 0.25rem 0 0 0.25rem;
   filter: drop-shadow(0px 2px 4px #22222233);
   background-color: var(--bgPanel);
+  z-index: 2;
+  border-radius: 4px;
+  opacity: 0.95;
   p {
     margin-right: 1rem;
   }
+}
+
+.time-slider-component {
+  width: -webkit-fill-available;
+}
+
+.control {
+  padding-right: 1rem;
 }
 
 .panel-items {
@@ -492,11 +915,16 @@ export default MyComponent
   }
 }
 
+.is-small {
+  font-size: 0.875rem;
+  height: 30px;
+}
+
 .map-layer {
   flex: 1;
 }
 
-.hello {
+.tight {
   margin-left: 0;
   margin-right: 0;
   padding: 0;

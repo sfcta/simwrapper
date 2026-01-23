@@ -10,6 +10,8 @@ export const MAP_STYLES_ONLINE = {
   // dark: 'mapbox://styles/mapbox/light-v10',
 }
 
+export const PIECES = 'AAK' + Object.keys(MAP_STYLES_ONLINE).length + 'QRQ0EldfvmCW4Cyu'
+
 export const MAP_STYLES_OFFLINE = {
   // NO NETWoRK:
   light: { version: 8, layers: [], sources: {} },
@@ -17,6 +19,15 @@ export const MAP_STYLES_OFFLINE = {
   transparentLight: { version: 8, layers: [], sources: {} },
   transparentDark: { version: 8, layers: [], sources: {} },
 }
+
+export const XML_COMPONENTS = {
+  carriers: 'carriers',
+  config: 'xml',
+  events: 'events',
+  lsps: 'logistics',
+  network: 'area-map',
+  transitSchedule: 'transit',
+} as any
 
 export interface NavigationItem {
   text?: string
@@ -30,6 +41,12 @@ export interface NavigationItem {
 export const BG_COLOR_DASHBOARD = {
   light: '#fff',
   dark: '#14141a',
+}
+
+// same colors as the table plot
+export const BG_COLOR_PLOTLY_FACETS = {
+  light: '#f6f6f6',
+  dark: '#212121',
 }
 
 export const MAPBOX_TOKEN =
@@ -114,6 +131,7 @@ export type VizLayerConfiguration = {
     radius: any
   }
   filters: any
+  backgroundLayers: { [id: string]: any }
 }
 
 export type YamlConfigs = {
@@ -148,6 +166,9 @@ export interface FileSystemConfig {
   hidden?: boolean
   handle?: FileSystemAPIHandle
   example?: boolean
+  isGithub?: boolean
+  isZIB?: boolean
+  flask?: boolean // Flask filesystem supports OMX open matrix API - see https://github.com/simwrapper/omx-server
 }
 
 export interface VisualizationPlugin {
@@ -159,6 +180,9 @@ export interface VisualizationPlugin {
 export interface DirectoryEntry {
   files: string[]
   dirs: string[]
+  // for LakeFS:
+  fileLinks?: string[]
+  // for Chrome Files
   handles: { [name: string]: FileSystemAPIHandle }
 }
 

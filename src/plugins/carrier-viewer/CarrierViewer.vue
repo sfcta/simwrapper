@@ -3,10 +3,14 @@
                 :style='{"background": urlThumbnail}'
                 oncontextmenu="return false")
 
-  .container-1
+  .container-1(
+      @mousemove="dividerDragging"
+      @mouseup="dividerDragEnd"
+  )
     .main-panel
-      tour-viz.anim(v-if="!thumbnail"
+      DeckMapComponent.anim(v-if="!thumbnail"
                   :activeTab="activeTab"
+                  :bgLayers="backgroundLayers"
                   :shipments="shownShipments"
                   :depots="shownDepots"
                   :legs="shownLegs"
@@ -18,14 +22,21 @@
                   :numSelectedTours="selectedTours.length"
                   :onClick="handleClick"
                   :projection="vizDetails.projection"
-                  )
-      ZoomButtons(v-if="!thumbnail")
+                  :services="vizDetails.services || false")
+
+      ZoomButtons(v-if="!thumbnail" corner="top-left")
       .xmessage(v-if="myState.statusMessage") {{ myState.statusMessage }}
 
-    .right-panel(v-if="!thumbnail" :darkMode="true")
+    .dragger(
+        @mousedown="dividerDragStart"
+        @mouseup="dividerDragEnd"
+        @mousemove.stop="dividerDragging"
+    )
+
+    .right-panel(:darkMode="true" :style="{width: `${legendSectionWidth}px`}")
       h3(style="margin-left: 0.25rem" v-if="carriers.length") {{ $t('carriers') }}
 
-      .carrier-list
+      .carrier-list(data-testid="carrier-list")
         .carrier(v-for="carrier in carriers" :key="carrier.$id"
                  :class="{selected: carrier.$id===selectedCarrier}"
                  @click="handleSelectCarrier(carrier)")
@@ -37,7 +48,7 @@
       b-field.detail-buttons(v-if="selectedCarrier" size="is-small")
 
         b-radio-button(v-model="activeTab" native-value="shipments" size="is-small" type="is-warning")
-          span {{ $t('shipments') }}
+          span {{ $t('jobs') }}
         b-radio-button(v-model="activeTab" native-value="tours" size="is-small" type="is-warning")
           span {{ $t('tours') }}
         b-radio-button(v-model="activeTab" native-value="vehicles" size="is-small" type="is-warning")
@@ -46,12 +57,18 @@
           span {{ $t('services') }}
 
       .detail-area
-        .shipments(v-if="activeTab=='shipments'")
-            span {{ $t('shipments')}}: {{ shipments.length}}
+        .shipments(v-if="activeTab=='shipments' && !vizDetails.services")
+            span {{ $t('jobs')}}: {{ shipments.length}}
             .leaf.tour(v-for="shipment,i in shipments" :key="`${i}-${shipment.$id}`"
                 @click="handleSelectShipment(shipment)"
                 :class="{selected: shipment==selectedShipment, 'shipment-in-tour': shipmentIdsInTour.includes(shipment.$id)}"
             ) {{ `${shipment.$id}: ${shipment.$from}-${shipment.$to}` }}
+        .shipments(v-if="activeTab=='shipments' && vizDetails.services")
+            span {{ $t('jobs')}}: {{ shipments.length}}
+            .leaf.tour(v-for="shipment,i in shipments" :key="`${i}-${shipment.$id}`"
+                @click="handleSelectShipment(shipment)"
+                :class="{selected: shipment==selectedShipment, 'shipment-in-tour': shipmentIdsInTour.includes(shipment.$id)}"
+            ) {{ `${shipment.$id}` }}
 
         .tours(v-if="activeTab=='tours'")
             .dropdown(v-if="this.plans.length > 1" :class="{'is-active': dropdownIsActive}" style="width: 100%")
@@ -98,7 +115,8 @@ const i18n = {
       carriers: 'Carriers',
       vehicles: 'VEHICLES',
       services: 'SERVICES',
-      shipments: 'SHIPMENTS',
+      shipments: 'JOBS',
+      jobs: 'JOBS',
       tours: 'TOURS',
       pickup: 'Pickup',
       delivery: 'Delivery',
@@ -106,15 +124,22 @@ const i18n = {
       shipmentDots: 'Show shipments',
       scaleSize: 'Widths',
       scaleFactor: 'Width',
+      service: 'Service',
     },
     de: {
       carriers: 'Unternehmen',
       vehicles: 'FAHRZEUGE',
       services: 'BETRIEBE',
-      shipments: 'LIEFERUNGEN',
+      shipments: 'AUFTRÄGE',
+      jobs: 'JOBS',
       tours: 'TOUREN',
       pickup: 'Abholung',
       delivery: 'Lieferung',
+      flatten: 'Simple&nbsp;tours',
+      shipmentDots: 'Show shipments',
+      scaleSize: 'Widths',
+      scaleFactor: 'Width',
+      service: 'Betrieb',
     },
   },
 }
@@ -130,13 +155,13 @@ import colorMap from 'colormap'
 
 import globalStore from '@/store'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
-import LegendColors from '@/components/LegendColors'
+import LegendColors from '@/components/LegendColors.vue'
 import ZoomButtons from '@/components/ZoomButtons.vue'
 import { gUnzip, parseXML, findMatchingGlobInFiles, arrayBufferToBase64 } from '@/js/util'
-
+import DashboardDataManager from '@/js/DashboardDataManager'
 import RoadNetworkLoader from '@/workers/RoadNetworkLoader.worker.ts?worker'
-
-import TourViz from './TourViz'
+import DeckMapComponent from './MapComponent.vue'
+import BackgroundLayers from '@/js/BackgroundLayers'
 
 import {
   FileSystem,
@@ -154,7 +179,7 @@ import {
 interface NetworkLinks {
   source: Float32Array
   dest: Float32Array
-  linkIds: any[]
+  linkId: any[]
   projection: String
 }
 
@@ -178,9 +203,9 @@ const CarrierPlugin = defineComponent({
   name: 'CarrierPlugin',
   i18n,
   components: {
+    DeckMapComponent,
     LegendColors,
     ToggleButton,
-    TourViz,
     ZoomButtons,
   },
   props: {
@@ -189,8 +214,9 @@ const CarrierPlugin = defineComponent({
     yamlConfig: String,
     config: Object as any,
     thumbnail: Boolean,
+    datamanager: { type: Object as PropType<DashboardDataManager> },
   },
-  data: () => {
+  data() {
     return {
       linkLayerId: Math.floor(1e12 * Math.random()),
 
@@ -208,6 +234,7 @@ const CarrierPlugin = defineComponent({
         title: '',
         description: '',
         thumbnail: '',
+        services: false,
         center: null as any,
       },
 
@@ -220,8 +247,18 @@ const CarrierPlugin = defineComponent({
         data: [] as any[],
       },
 
+      isDraggingDivider: 0,
+      dragStartWidth: 250,
+      legendSectionWidth: 275,
+
+      // DataManager might be passed in from the dashboard; or we might be
+      // in single-view mode, in which case we need to create one for ourselves
+      myDataManager: this.datamanager || new DashboardDataManager(this.root, this.subfolder),
+
       searchTerm: '',
       searchEnabled: false,
+
+      backgroundLayers: null as BackgroundLayers | null,
 
       globalState: globalStore.state,
       isLoaded: true,
@@ -345,6 +382,21 @@ const CarrierPlugin = defineComponent({
   },
 
   methods: {
+    dividerDragStart(e: MouseEvent) {
+      this.isDraggingDivider = e.clientX
+      this.dragStartWidth = this.legendSectionWidth
+    },
+
+    dividerDragEnd(e: MouseEvent) {
+      this.isDraggingDivider = 0
+    },
+
+    dividerDragging(e: MouseEvent) {
+      if (!this.isDraggingDivider) return
+      const deltaX = this.isDraggingDivider - e.clientX
+      this.legendSectionWidth = Math.max(0, this.dragStartWidth + deltaX)
+    },
+
     handleSelectShipment(shipment: any) {
       // console.log({ shipment })
 
@@ -353,7 +405,7 @@ const CarrierPlugin = defineComponent({
         this.shownShipments = []
 
         // if everything is deselected, reset view
-        if (!this.selectedTours.length) {
+        if (!this.selectedTours.length || this.selectedShipment == null) {
           const carrier = this.carriers.filter(c => c.$id == this.selectedCarrier)
           this.selectedCarrier = ''
           this.handleSelectCarrier(carrier[0])
@@ -399,11 +451,17 @@ const CarrierPlugin = defineComponent({
       }
 
       for (const activity of tour.plan) {
-        if (!activity.$shipmentId) continue
+        if (!activity.$shipmentId && !activity.$serviceId) continue
 
-        shipmentIdsInTour.push(activity.$shipmentId)
+        var shipment
+        if (activity.$serviceId) {
+          shipmentIdsInTour.push(activity.$serviceId)
+          shipment = this.shipmentLookup[activity.$serviceId]
+        } else {
+          shipmentIdsInTour.push(activity.$shipmentId)
+          shipment = this.shipmentLookup[activity.$shipmentId]
+        }
 
-        const shipment = this.shipmentLookup[activity.$shipmentId]
         if (!shipment) continue
 
         const link = (activity.$type === 'pickup' ? shipment.$from : shipment.$to) as string
@@ -642,9 +700,7 @@ const CarrierPlugin = defineComponent({
       this.shipments = this.processShipments(carrier)
 
       if (carrier.services?.service?.length)
-        this.services = carrier.services.service
-          .map((s: any) => s.$)
-          .sort((a: any, b: any) => naturalSort(a.$id, b.$id))
+        this.services = carrier.services.service.sort((a: any, b: any) => naturalSort(a.$id, b.$id))
 
       this.tours = this.processTours(carrier)
 
@@ -748,11 +804,19 @@ const CarrierPlugin = defineComponent({
 
     processShipments(carrier: any) {
       this.shipmentLookup = {} as any
-      if (!carrier.shipments?.shipment?.length) return []
+      var shipments = []
+      // if there are no shipments, look for services
+      if (!carrier.shipments?.shipment?.length) {
+        if (!carrier.services?.service?.length) {
+          return []
+        } else {
+          shipments = carrier.services.service.sort((a: any, b: any) => naturalSort(a.$id, b.$id))
+          this.processServices(carrier, shipments)
+        }
+      } else {
+        shipments = carrier.shipments.shipment.sort((a: any, b: any) => naturalSort(a.$id, b.$id))
+      }
 
-      const shipments = carrier.shipments.shipment.sort((a: any, b: any) =>
-        naturalSort(a.$id, b.$id)
-      )
       try {
         for (const shipment of shipments) {
           // shipment has link id, so we go from link.from to link.to
@@ -768,6 +832,27 @@ const CarrierPlugin = defineComponent({
       }
 
       return shipments
+    },
+
+    processServices(carrier: any, shipments: any[]) {
+      // *** For each service, we lookup check the plans for an act with the service_id that matches,
+      // then take the first link of that corresponding leg's route.
+      // That is then the from link and the to link we grabe from the service object. ***
+
+      this.vizDetails.services = true
+
+      try {
+        for (const shipment of shipments) {
+          // shipment has link id, so we go from link.from to link.to
+          shipment.toX = 0.5 * (this.links[shipment.$to][0] + this.links[shipment.$to][2])
+          shipment.toY = 0.5 * (this.links[shipment.$to][1] + this.links[shipment.$to][3])
+          shipment.type = 'service'
+
+          this.shipmentLookup[shipment.$id] = shipment
+        }
+      } catch (e) {
+        // if xy are missing, skip this -- just means network isn't loaded yet.
+      }
     },
 
     // this happens if viz is the full page, not a thumbnail on a project page
@@ -804,13 +889,19 @@ const CarrierPlugin = defineComponent({
 
           const text = await this.fileApi.getFileText(filename)
           this.vizDetails = YAML.parse(text)
+          if (this.vizDetails.title) {
+            this.$emit('title', this.vizDetails.title)
+          }
+
           return
         } catch (e) {
-          console.log('failed')
+          console.log('failed' + e)
           // maybe it failed because password?
           const err = e as any
           if (this.fileSystem.needPassword && err.status === 401) {
             globalStore.commit('requestLogin', this.fileSystem.slug)
+          } else {
+            this.$emit('error', '' + e)
           }
           return
         }
@@ -844,6 +935,7 @@ const CarrierPlugin = defineComponent({
         center: this.vizDetails.center,
         projection: '',
         thumbnail: '',
+        services: false,
       }
 
       const t = 'Carrier Explorer'
@@ -970,10 +1062,17 @@ const CarrierPlugin = defineComponent({
     async loadNetwork() {
       this.myState.statusMessage = 'Loading network...'
 
-      if (this.vizDetails.network.indexOf('.xml.') > -1) {
-        // load matsim xml file
-        const path = `${this.myState.subfolder}/${this.vizDetails.network}`
-        const net = await this.fetchNetwork(path, {})
+      if (
+        this.vizDetails.network.indexOf('.xml.') > -1 ||
+        this.vizDetails.network.endsWith('.avro')
+      ) {
+        const net = (await this.myDataManager.getRoadNetwork(
+          this.vizDetails.network,
+          this.subfolder,
+          this.vizDetails,
+          null,
+          true
+        )) as any
 
         this.vizDetails.projection = '' + net.projection
 
@@ -981,7 +1080,7 @@ const CarrierPlugin = defineComponent({
         this.myState.statusMessage = 'Building network link table'
         const links: { [id: string]: number[] } = {}
 
-        net.linkIds.forEach((linkId: string, i: number) => {
+        net.linkId.forEach((linkId: string, i: number) => {
           links[linkId] = [
             net.source[i * 2],
             net.source[i * 2 + 1],
@@ -1084,7 +1183,7 @@ const CarrierPlugin = defineComponent({
           const blob = await this.fileApi.getFileBlob(filepath)
           const buffer = await blob.arrayBuffer()
           // recursively gunzip until it can gunzip no more:
-          const unzipped = gUnzip(buffer)
+          const unzipped = await gUnzip(buffer)
           const text = new TextDecoder('utf-8').decode(unzipped)
           return text
         }
@@ -1149,6 +1248,18 @@ const CarrierPlugin = defineComponent({
 
     // Select the first tour if the tours are loaded
     if (this.tours.length) this.handleSelectTour(this.tours[0])
+
+    // background layers
+    try {
+      this.backgroundLayers = new BackgroundLayers({
+        vizDetails: this.vizDetails,
+        fileApi: this.fileApi,
+        subfolder: this.subfolder,
+      })
+      await this.backgroundLayers.initialLoad()
+    } catch (e) {
+      this.$emit('error', 'Error loading background layers')
+    }
   },
 
   beforeDestroy() {
@@ -1169,19 +1280,12 @@ export default CarrierPlugin
    The emerging W3C standard is currently Firefox-only */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #454 $steelGray;
+  scrollbar-color: var(--bgBold) var(--bgPanel2);
 }
 
 /* And this works on Chrome/Edge/Safari */
 *::-webkit-scrollbar {
   width: 10px;
-}
-*::-webkit-scrollbar-track {
-  background: var(--bgPanel3);
-}
-*::-webkit-scrollbar-thumb {
-  background-color: var(--textVeryPale);
-  border-radius: 6px;
 }
 
 .carrier-viewer {
@@ -1193,8 +1297,11 @@ export default CarrierPlugin
 }
 
 .container-1 {
-  display: flex;
+  display: grid;
   height: 100%;
+  grid-template-columns: 1fr auto auto;
+  grid-template-rows: 1fr;
+  pointer-events: auto;
 }
 
 .carrier-viewer.hide-thumbnail {
@@ -1204,6 +1311,7 @@ export default CarrierPlugin
 .main-panel {
   position: relative;
   flex: 1;
+  background-color: var(--bgBold);
 }
 
 h4 {
@@ -1221,9 +1329,8 @@ h4 {
   font-size: 0.8rem;
   pointer-events: auto;
   background-color: var(--bgPanel3);
-  width: 18rem;
-  max-width: 18rem;
   padding: 0 0.25rem;
+  overflow-y: auto;
 }
 
 .nav {
@@ -1401,6 +1508,7 @@ input {
   0% {
     opacity: 0;
   }
+
   100% {
     opacity: 1;
   }
@@ -1477,6 +1585,22 @@ input {
 
 .dropdown {
   margin-bottom: 0.5rem;
+}
+
+.dragger {
+  grid-row: 1 / 2;
+  grid-column: 2 / 3;
+  width: 0.4rem;
+  background-color: var(--bgBold);
+  user-select: none;
+}
+
+.dragger:hover,
+.dragger:active {
+  background-color: var(--sliderThumb);
+  transition: background-color 0.3s ease;
+  transition-delay: 0.1s;
+  cursor: ew-resize;
 }
 
 @media only screen and (max-width: 640px) {

@@ -1,7 +1,7 @@
 <template lang="pug">
 .map-complications(:style="cornerSettings")
 
-  map-scale.map-scale
+  map-scale.map-scale(:corner="corner")
 
   .zoom-buttons
     .button-single.button-top
@@ -50,8 +50,9 @@ import { defineComponent } from 'vue'
 import globalStore from '@/store'
 import MapScale from '@/components/MapScale.vue'
 
-enum Corner {
+export enum Corner {
   TOP,
+  TOPLEFT,
   BOTTOM,
 }
 
@@ -80,6 +81,7 @@ export default defineComponent({
   mounted() {
     // default zoom buttons are in bottom-right
     if (this.corner && this.corner.startsWith('top')) this.location = Corner.TOP
+    if (this.corner === 'top-left') this.location = Corner.TOPLEFT
     if (this.corner && this.corner.startsWith('bottom')) this.location = Corner.BOTTOM
   },
   watch: {
@@ -98,6 +100,16 @@ export default defineComponent({
         style = Object.assign(style, {
           flexDirection: 'row',
           top: '5px',
+        })
+      }
+
+      if (this.location == Corner.TOPLEFT) {
+        style = Object.assign(style, {
+          flexDirection: 'row-reverse',
+          top: '8px',
+          left: '0px',
+          paddingLeft: 0,
+          right: 'unset',
         })
       }
 
@@ -164,15 +176,16 @@ export default defineComponent({
 @import '@/styles.scss';
 
 .map-complications {
+  display: flex;
   position: absolute;
   pointer-events: none;
+  user-select: none;
   cursor: pointer;
   zoom: -5;
 }
 
 .zoom-buttons {
   padding-left: 7px;
-  margin-left: auto;
   pointer-events: auto;
   z-index: 2;
   margin-bottom: 8px;
@@ -193,6 +206,11 @@ export default defineComponent({
 
 .img-button {
   height: 22px;
+  -webkit-user-drag: none;
+  user-select: none;
+  -moz-user-select: none;
+  -webkit-user-select: none;
+  -ms-user-select: none;
 }
 
 .button-top {
@@ -212,6 +230,10 @@ export default defineComponent({
 
 .map-scale {
   margin-top: 1px;
+}
+
+.map-scale.scale-left {
+  margin-left: 7px;
 }
 
 @media only screen and (max-width: 640px) {

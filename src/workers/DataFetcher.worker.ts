@@ -1,12 +1,11 @@
 /*eslint prefer-rest-params: "off"*/
 
-import pako from 'pako'
 import DBF from '@/js/dbfReader'
 import Papa from '@simwrapper/papaparse'
 
 import { DataTableColumn, DataTable, DataType, FileSystemConfig } from '@/Globals'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
-import { findMatchingGlobInFiles } from '@/js/util'
+import { gUnzip, findMatchingGlobInFiles } from '@/js/util'
 
 // global variables
 let _fileSystem: HTTPFileSystem
@@ -16,12 +15,16 @@ let _config: any = {}
 let _dataset = ''
 let _buffer: Uint8Array
 let _highPrecision = false
+let _comments = [] as any
 
 const _fileData: { [key: string]: DataTable } = {}
 
 onmessage = function (e) {
   fetchData(e.data)
 }
+
+// Let main thread know we are alive and listening
+postMessage({ ready: true })
 
 async function fetchData(props: {
   fileSystemConfig: FileSystemConfig
@@ -36,7 +39,7 @@ async function fetchData(props: {
   _dataset = _config.dataset
   if (props.options?.highPrecision) _highPrecision = true
 
-  // Did we get featureProperties array? Just need to convert it to DataTable
+  // Did we get featureProperties array? Convert it to DataTable
   if (props.featureProperties) {
     convertFeaturePropertiesToDataTable(props.featureProperties)
     postMessage(_fileData[_dataset])
@@ -46,7 +49,7 @@ async function fetchData(props: {
   // Did we get a pre-filled buffer? Just need to parse it
   if (props.buffer) {
     _buffer = props.buffer
-    parseData(_dataset, _buffer)
+    parseData(_dataset, _buffer as any)
     postMessage(_fileData[_dataset])
     return
   }
@@ -61,17 +64,24 @@ async function fetchData(props: {
     // if dataset has a path in it, we need to fetch the correct subfolder contents
     const slash = _config.dataset.indexOf('/')
     if (slash > -1) {
-      const mergedFolder = slash === 0 ? _config.dataset : `${_subfolder}/${_config.dataset}`
+      // handle "./blah" paths correctly
+      let relativeSubfolder = _subfolder
+      if (_subfolder) relativeSubfolder += '/'
+
+      const mergedFolder = slash === 0 ? _config.dataset : `${relativeSubfolder}${_config.dataset}`
       _dataset = mergedFolder.substring(1 + mergedFolder.lastIndexOf('/'))
       _subfolder = mergedFolder.substring(0, mergedFolder.lastIndexOf('/'))
 
       // need to fetch new list of files
-      const { files } = await _fileSystem.getDirectory(_subfolder)
+      let fixedFolder = _subfolder.startsWith('./') ? _subfolder.slice(2) : _subfolder
+      const { files } = await _fileSystem.getDirectory(fixedFolder)
       _files = files
     }
 
     // load all files
     await loadFile()
+    // add extra "_comments" column
+    if (_comments.length) _fileData[_dataset]._comments = _comments
     postMessage(_fileData[_dataset])
   } catch (e) {
     const error = '' + e
@@ -138,7 +148,7 @@ async function loadFile() {
   // figure out which file to load
   const matchingFiles = findMatchingGlobInFiles(_files, datasetPattern)
 
-  if (matchingFiles.length == 0) throw Error(`No files matched "${datasetPattern}"`)
+  if (matchingFiles.length == 0) throw Error(`File not found: "${datasetPattern}"`)
   if (matchingFiles.length > 1)
     throw Error(`More than one file matched "${datasetPattern}": ${matchingFiles}`)
 
@@ -151,16 +161,21 @@ async function loadFile() {
   parseData(filename, unzipped)
 }
 
-async function parseData(filename: string, buffer: Uint8Array) {
-  if (filename && filename.toLocaleLowerCase().endsWith('.dbf')) {
-    const dataTable = DBF(buffer, new TextDecoder('windows-1252')) // dbf has a weird default textcode
-    calculateMaxValues(_dataset, dataTable)
-    _fileData[_dataset] = dataTable
-  } else {
-    // convert text to utf-8
-    const text = new TextDecoder().decode(buffer)
-    // parse the text: we can handle CSV or XML
-    await parseVariousFileTypes(_dataset, filename, text)
+async function parseData(filename: string, buffer: ArrayBuffer) {
+  try {
+    if (filename && filename.toLocaleLowerCase().endsWith('.dbf')) {
+      const dataTable = DBF(buffer, new TextDecoder('windows-1252')) // dbf has a weird default textcode
+      calculateMaxValues(_dataset, dataTable)
+      _fileData[_dataset] = dataTable
+    } else {
+      // convert text to utf-8
+      const text = new TextDecoder().decode(buffer)
+      // parse the text: we can handle CSV or XML
+      await parseVariousFileTypes(_dataset, filename, text)
+    }
+  } catch (e) {
+    const msg = ('' + e).replaceAll('Error: ', '')
+    postMessage({ error: msg })
   }
 }
 
@@ -204,7 +219,7 @@ function parseCsvFile(fileKey: string, filename: string, text: string) {
 
   const headerLookup: any = {}
   const csv = Papa.parse(text, {
-    // preview: 10000,
+    // preview: 100000,
     delimitersToGuess: ['\t', ';', ',', ' '],
     comments: '#',
     skipEmptyLines: true,
@@ -218,6 +233,11 @@ function parseCsvFile(fileKey: string, filename: string, text: string) {
       return column.trim()
     },
   })
+
+  if (!csv.data?.length) {
+    console.error('NODATA - Papaparse returned nothing!')
+    throw Error('Bad format, no data, or too large - Error loading')
+  }
 
   let headers = csv.meta.fields || []
 
@@ -280,8 +300,13 @@ function parseCsvFile(fileKey: string, filename: string, text: string) {
       }
     }
   }
+
   calculateMaxValues(fileKey, dataTable)
   _fileData[fileKey] = dataTable
+
+  // store comments, too
+  _comments = [...new Set(csv.comments)]
+  if (_comments.length) console.log({ _comments })
 }
 
 function calculateMaxValues(fileKey: string, dataTable: DataTable) {
@@ -368,20 +393,6 @@ function badparseCsvFile(fileKey: string, filename: string, text: string) {
 }
 
 async function loadFileOrGzipFile(filename: string) {
-  /**
-   * This recursive function gunzips the buffer. It is recursive because
-   * some combinations of subversion, nginx, and various web browsers
-   * can single- or double-gzip .gz files on the wire. It's insane but true.
-   */
-  function gUnzip(buffer: any): Uint8Array {
-    // GZIP always starts with a magic number, hex $8b1f
-    const header = new Uint8Array(buffer.slice(0, 2))
-    if (header[0] === 0x1f && header[1] === 0x8b) {
-      return gUnzip(pako.inflate(buffer))
-    }
-    return buffer
-  }
-
   const filepath = `${_subfolder}/${filename}`
 
   // fetch the file
@@ -390,7 +401,7 @@ async function loadFileOrGzipFile(filename: string) {
   const buffer = await blob.arrayBuffer()
 
   // recursively gunzip until it can gunzip no more:
-  const unzipped = gUnzip(buffer)
+  const unzipped = await gUnzip(buffer)
 
   return unzipped
 }

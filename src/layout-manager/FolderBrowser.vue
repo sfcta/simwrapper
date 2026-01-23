@@ -8,55 +8,66 @@
 
   //- main content
   .stripe.details(v-else)
-   .vessel
+   //- show zoomed image
+   .image-zoom.flex-col(v-if="isZoomedImage" @click="isZoomedImage=null")
+      image-view.image-zoom(
+        :root="myState.svnProject.slug"
+        :subfolder="myState.subfolder"
+        :yamlConfig="isZoomedImage.config"
+        :fileApi="myState.svnRoot"
+        :style="{'pointer-events': 'auto'}"
+      )
+      p: b {{ isZoomedImage.title }}
+
+   //- show everthing else
+   .vessel(v-show="!isZoomedImage" :id="idFolderTable" :class="{narrow: isNarrow}")
 
     //- these are sections defined by viz-summary.yml etc
-    .curated-sections
+    .curated-sections()
 
-      //- file system folders
-      h3.curate-heading(v-if="myState.folders.length")  {{ $t('Folders') }}
+      .folder-title-stuff.flex-row
+        .flex1
+          h2 {{ cleanFolderTitle  }}
+        .favstar
+          p.favorite-icon-this(title="Favorite"
+            :class="{'is-thisfolderfavorite': isThisFolderFavorite}"
+            @click="clickedFavorite"
+          ): i.fa.fa-star
 
-      .curate-content(v-if="myState.folders.length")
-        .folder-table
-          .folder(v-for="folder,i in myState.folders"
-                  :key="folder.name"
-                  :class="{fade: myState.isLoading, 'up-folder': i == 0}"
-                  @click="openOutputFolder(folder)"
-          )
-            p
-              i.fa(:class="i == 0 ? 'fa-arrow-up' : 'fa-folder-open'")
-              | &nbsp;{{ cleanName(folder) }}
+      //- FOLDERS: file system folders
+      .folder-area(v-if="myState.folders.length")
+        h4.az-title.folder-title  {{ $t('Folders') }}
+        .az-grid.folder-table
+          //- .az-cell.heading folder
+          //- .az-cell.heading Description
+          .az-cell.folder(v-for="folder,i in myState.folders" :key="folder"
+                    :class="{fade: myState.isLoading, 'up-folder': i == 0}"
+                    @click="openOutputFolder(folder)")
+              .is-favorite(v-if="isFavorite(folder)")
+              p
+                i.fa(:class="i == 0 ? 'fa-arrow-up' : 'fa-folder'" :style="i == 0 ? 'color: green' : 'color: #ea0'")
+                span(:style="isFavorite(folder) && 'font-weight: bold'") &nbsp;&nbsp;{{ cleanName(folder) }}
 
-      //- this is the content of readme.md, if it exists
+      //- README: content of readme.md, if it exists
       .readme-header.markdown(v-if="myState.readme")
         .curate-content.markdown(v-html="myState.readme")
 
       //- MAPS: thumbnails of each viz map here
       .section-maps(v-if="Object.keys(vizMaps).length")
-        h3.curate-heading {{ $t('Maps')}}
-        .curate-content
-          .viz-table
-            .viz-grid-item(v-for="[index, viz] of Object.entries(vizMaps)" :key="index"
-                      @click="clickedVisualization(index)")
-
-              .viz-frame
-                p.v-title: b {{ viz.title }}
-                p.v-filename {{ viz.config }}
-                p.v-plugin(:style="getTabColor(viz.component)") {{ viz.component || 'dashboard' }}
-                component.viz-frame-component(
-                      v-show="false"
-                      :is="viz.component"
-                      :root="myState.svnProject.slug"
-                      :subfolder="myState.subfolder"
-                      :yamlConfig="viz.config"
-                      :thumbnail="true"
-                      :fileApi="myState.svnRoot"
-                      :style="{'pointer-events': 'none'}"
-                      @title="updateTitle(index, $event)")
+        h4.az-title {{ $t('Maps')}}
+        .az-grid.map-grid(:class="{narrow: isNarrow}")
+          .az-cell.heading Title
+          .az-cell.heading.file-cell Filename
+          .az-cell.heading Type
+          .az-row(v-for="[index, viz] of Object.entries(vizMaps)" :key="index" @click="clickedVisualization(index)")
+            a.az-cell: b {{ viz.title }}
+            .az-cell.pointer.file-cell(:class="{'sameFilename': viz.title == viz.config}") {{ viz.config }}
+            .az-cell
+              .v-plugin.pointer(:style="`background-color: ${getTabColor(viz.component)}`") {{ viz.component || 'dashboard' }}
 
       //- IMAGES here
       .section-images(v-if="Object.keys(vizImages).length")
-        h3.curate-heading {{ $t('Images')}}
+        h4.az-title {{ $t('Images')}}
         .curate-content
           .viz-image-table
             .viz-image-grid-item(v-for="[index, viz] of Object.entries(vizImages)" :key="index"
@@ -77,15 +88,20 @@
       //- FILES: individual links to files in this folder
       //- this is DISABLED for Chrome API for now, because we
       //- can't download those files via regular URL
-      .files-section(v-if="myState?.svnProject?.baseURL")
-        h3.curate-heading(v-if="myState.files.length") {{$t('Files')}}
-
+      //- .files-section(v-if="myState?.svnProject?.baseURL")
+      .files-section
+        h4.az-title(v-if="myState.files.length") {{$t('Files')}}
         .curate-content(v-if="myState.files.length")
           .file-table
             .file(v-for="file in myState.files" :key="file"
               :class="{fade: myState.isLoading}"
             )
-              a(:href="`${myState.svnProject.baseURL}/${myState.subfolder}/${file}`") {{ cleanName(file) }}
+              a(v-if="myState?.svnProject?.baseURL"
+                :href="`${myState.svnProject.baseURL}/${myState.subfolder}/${file}`"
+              ) {{ cleanName(file) }}
+              a(v-else
+                @click="chromeOpenFile(file)"
+              ) {{ cleanName(file) }}
 
 </template>
 
@@ -128,39 +144,50 @@ interface IMyState {
   subfolder: string
   summary: boolean
   vizes: VizEntry[]
-  finalFolder: string
 }
 
 import { defineComponent } from 'vue'
 import type { PropType } from 'vue'
 
+import katex from 'katex'
 import markdown from 'markdown-it'
-import mediumZoom from 'medium-zoom'
+import markdownTex from 'markdown-it-texmath'
 import micromatch from 'micromatch'
-import yaml from 'yaml'
+import YAML from 'yaml'
 
 import globalStore from '@/store'
-import { BreadCrumb, FileSystemConfig, YamlConfigs } from '@/Globals'
+import { FavoriteLocation, FileSystemConfig, XML_COMPONENTS, YamlConfigs } from '@/Globals'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
 import { pluginComponents } from '@/plugins/pluginRegistry'
 
 import TopsheetsFinder from '@/components/TopsheetsFinder/TopsheetsFinder.vue'
 
+const mdRenderer = new markdown({
+  html: true,
+  linkify: true,
+  typographer: true,
+}).use(markdownTex, {
+  engine: katex,
+  delimiters: 'dollars',
+  katexOptions: { macros: { '\\RR': '\\mathbb{R}' } },
+})
+
 const tabColors = {
   // blank means dashboard:
   '': '#118860',
   // others are kebab-case:
-  'aggregate-od': '#E98B52',
-  'vehicle-anim': '#330033',
-  'x-y-t': '#583270',
-  'carrier-viewer': '#c97A2C',
+  aggregate: '#c2b934',
+  'area-map': '#3988E1',
+  carriers: '#585FD1',
+  logistics: '#FF517A',
   events: '#4400ff',
-  hexagons: '#900564',
-  'area-map': '#c94264',
-  network: '#894654',
-  sankey: '#D8A672',
-  summary: '#2EA95B',
-  transit: '#3B6FE4',
+  hexagons: '#1Bc99C',
+  links: '#1FB3D3',
+  sankey: '#DF41A1',
+  summary: '#AFF05B',
+  transit: '#8B008B',
+  'vehicle-anim': '#330033',
+  xytime: '#dF704E',
 } as any
 
 export default defineComponent({
@@ -173,14 +200,15 @@ export default defineComponent({
     xsubfolder: String,
   },
   data: () => {
+    const idFolderTable = `id-${Math.random()}`
     return {
       globalState: globalStore.state,
       summaryYamlFilename: 'viz-summary.yml',
-      mdRenderer: new markdown({
-        html: true,
-        linkify: true,
-        typographer: true,
-      }),
+      mdRenderer,
+      idFolderTable,
+      isNarrow: false,
+      isZoomedImage: null as any,
+      resizeObserver: {} as ResizeObserver,
       myState: {
         errorStatus: '',
         folders: [],
@@ -192,11 +220,41 @@ export default defineComponent({
         subfolder: '',
         vizes: [],
         summary: false,
-        finalFolder: '',
       } as IMyState,
     }
   },
   computed: {
+    cleanFolderTitle() {
+      let name: any = this.xsubfolder || this.cwd || this.root
+      name = name.replaceAll('//', '/')
+      if (name.endsWith('/')) name = name.substring(0, name.length - 1)
+      return name
+    },
+
+    isThisFolderFavorite(): any {
+      let key = this.root
+      if (this.xsubfolder) key += `/${this.xsubfolder}`
+      if (key.endsWith('/')) key = key.substring(0, key.length - 1)
+
+      const indexOfPathInFavorites = globalStore.state.favoriteLocations.findIndex(
+        f => key == f.fullPath
+      )
+      return indexOfPathInFavorites > -1
+    },
+    cwd() {
+      return this.$route.query.cwd || ''
+    },
+
+    favoriteLocations(): string[] {
+      const faves = this.$store.state.favoriteLocations.filter((fave: FavoriteLocation) => {
+        if (fave.root !== this.root) return false
+        if (!fave.subfolder.startsWith('' + this.xsubfolder)) return false
+        return true
+      }) as FavoriteLocation[]
+
+      return faves.map(f => f.fullPath || '')
+    },
+
     vizImages(): any {
       const images: { [index: number]: any } = {}
       for (let i = 0; i < this.myState.vizes.length; i++) {
@@ -218,6 +276,83 @@ export default defineComponent({
     },
   },
   methods: {
+    clickedFavorite() {
+      let hint = `${this.root}/${this.xsubfolder}`
+      let finalFolder = this.xsubfolder || this.root
+      // remove current folder from subfolder
+      const lastSlash = hint.lastIndexOf('/')
+      if (lastSlash > -1) {
+        finalFolder = hint.substring(lastSlash + 1)
+        hint = hint.substring(0, lastSlash)
+      }
+
+      let fullPath = `${this.root}/${this.xsubfolder}`
+      if (fullPath.endsWith('/')) fullPath = fullPath.substring(0, fullPath.length - 1)
+
+      const favorite: FavoriteLocation = {
+        root: this.root,
+        subfolder: this.xsubfolder || '',
+        label: finalFolder,
+        fullPath,
+        hint,
+      }
+
+      this.$store.commit(this.isThisFolderFavorite ? 'removeFavorite' : 'addFavorite', favorite)
+    },
+
+    async guessTitles() {
+      const re = /\.(yml|yaml)$/
+      for (const viz of this.myState.vizes) {
+        try {
+          if (re.test(viz.config)) {
+            const text =
+              (await this.myState.svnRoot?.getFileText(
+                this.myState.subfolder + '/' + viz.config
+              )) || ''
+            const yaml = YAML.parse(text)
+            if (yaml.title) viz.title = yaml.title
+          }
+        } catch (e) {
+          // oh well
+        } finally {
+          if (viz.title == '..') viz.title = viz.config
+        }
+      }
+    },
+
+    async chromeOpenFile(filename: string) {
+      const decoded = decodeURIComponent(filename)
+      const path = `${this.xsubfolder}/${decoded}`
+      const blob = await this.myState.svnRoot?.getFileBlob(path)
+      if (!blob) return
+
+      var element = document.createElement('a')
+      const downloadUrl = URL.createObjectURL(blob)
+      element.setAttribute('href', downloadUrl)
+      element.setAttribute('download', filename)
+      element.style.display = 'none'
+      document.body.appendChild(element)
+
+      element.click()
+
+      document.body.removeChild(element)
+      // memoryyyyy
+      URL.revokeObjectURL(downloadUrl)
+    },
+
+    showBuilder() {
+      console.log('VIZWIT')
+      // this.$router.push(`${this.$route.fullPath + '?edit'}`)
+      this.$emit('edit')
+    },
+
+    isFavorite(folder: string) {
+      let thing = `${this.root}`
+      if (this.xsubfolder) thing += `/${this.xsubfolder}`
+      thing += `/${folder}`
+      return this.favoriteLocations.indexOf(thing) > -1
+    },
+
     cleanName(text: string) {
       return decodeURIComponent(text)
     },
@@ -239,7 +374,11 @@ export default defineComponent({
       const viz = this.myState.vizes[vizNumber]
 
       // special case: images don't click thru
-      if (viz.component === 'image-view') return
+      if (viz.component === 'image-view') {
+        this.isZoomedImage = viz
+        // !this.isZoomedImage
+        return
+      }
 
       if (!this.myState.svnProject) return
 
@@ -276,7 +415,9 @@ export default defineComponent({
       }
     },
 
-    buildShowEverythingView() {
+    async buildShowEverythingView() {
+      const fileSet = new Set(this.myState.files)
+
       // loop on each viz type
       for (const viz of this.globalState.visualizationTypes.values()) {
         // match based on file patterns registered for each viz
@@ -284,6 +425,19 @@ export default defineComponent({
         for (const file of matches) {
           // add thumbnail for each matching file
           this.myState.vizes.push({ component: viz.kebabName, config: file, title: '..' })
+          // remove file from set of unmapped files
+          fileSet.delete(file)
+        }
+      }
+
+      // check for any remaining XML files
+      const xmlFiles = micromatch([...fileSet.keys()], ['*.xml', '*.xml.gz'], { nocase: true })
+      for (const file of xmlFiles) {
+        const answer = await this.myState.svnRoot?.probeXmlFileType(
+          `${this.myState.subfolder}/${file}`
+        )
+        if (answer && XML_COMPONENTS[answer]) {
+          this.myState.vizes.push({ component: XML_COMPONENTS[answer], config: file, title: file })
         }
       }
     },
@@ -292,7 +446,7 @@ export default defineComponent({
     async buildCuratedSummaryView() {
       if (!this.myState.svnRoot) return
 
-      const summaryYaml = yaml.parse(
+      const summaryYaml = YAML.parse(
         await this.myState.svnRoot.getFileText(
           this.myState.subfolder + '/' + this.summaryYamlFilename
         )
@@ -359,8 +513,8 @@ export default defineComponent({
         const folderContents = await this.myState.svnRoot.getDirectory(this.myState.subfolder)
 
         // hide dot folders
-        const folders = folderContents.dirs.filter(f => !f.startsWith('.')).sort()
-        const files = folderContents.files.filter(f => !f.startsWith('.')).sort()
+        const folders = folderContents.dirs.filter(f => !f.startsWith('.'))
+        const files = folderContents.files.filter(f => !f.startsWith('.'))
 
         // Also show any project-level viz thumbnails from other folders
         // (but, ensure that files in this folder supercede any project viz files
@@ -375,6 +529,8 @@ export default defineComponent({
         this.myState.errorStatus = ''
         this.myState.folders = [' UP'].concat(folders)
         this.myState.files = allVizes
+
+        await this.updateFolderLayout()
       } catch (err) {
         // Bad things happened! Tell user
         const e = err as any
@@ -404,6 +560,7 @@ export default defineComponent({
       } finally {
         this.myState.isLoading = false
       }
+      this.guessTitles()
     },
 
     openOutputFolder(folder: string) {
@@ -419,7 +576,9 @@ export default defineComponent({
         folder === '..'
           ? this.myState.subfolder.substring(0, this.myState.subfolder.lastIndexOf('/'))
           : this.myState.subfolder + '/' + folder
+
       if (target.startsWith('/')) target = target.slice(1)
+      if (!target.endsWith('/')) target += '/'
 
       const props = {
         root: this.myState.svnProject.slug,
@@ -435,8 +594,7 @@ export default defineComponent({
     },
 
     getTabColor(kebabName: string) {
-      const color = tabColors[kebabName] || '#8778BB'
-      return { backgroundColor: color }
+      return tabColors[kebabName] || '#c2b934'
     },
 
     updateRoute() {
@@ -452,11 +610,30 @@ export default defineComponent({
       // this happens async
       this.fetchFolderContents()
     },
+
+    async updateFolderLayout() {
+      await this.$nextTick()
+      const container = document.getElementById(this.idFolderTable) as any
+      if (!container) return
+
+      // revise number of subfolder listing columns
+      const items = this.myState.folders.length
+      const itemHeight = 36 // Approximate height of each item
+      const containerWidth = container.offsetWidth
+      const itemWidth = 200 // Minimum width of each item
+      const maxColumns = 1 + Math.floor(containerWidth / itemWidth)
+
+      let numRows = 8 + Math.ceil(items / maxColumns)
+      if (containerWidth < 500) numRows = 10000
+      container.style.setProperty('--num-rows', numRows)
+
+      // handle narrow viz list layout
+      const clientWidth = container.clientWidth
+      this.isNarrow = clientWidth < 550
+    },
   },
   watch: {
     'globalState.colorScheme'() {
-      // medium-zoom freaks out if color theme is swapped.
-      // so let's reload images just in case.
       this.fetchFolderContents()
     },
     xsubfolder() {
@@ -481,24 +658,23 @@ export default defineComponent({
       if (this.myState.summary) {
         await this.buildCuratedSummaryView()
       } else {
-        this.buildShowEverythingView()
-      }
-
-      // make sure page is rendered before we attach zoom semantics
-      await this.$nextTick()
-      try {
-        setTimeout(() => {
-          mediumZoom('.medium-zoom', {
-            background: '#333344',
-          })
-        }, 250)
-      } catch (e) {
-        // oh well
+        await this.buildShowEverythingView()
       }
     },
   },
+
+  beforeDestroy() {
+    this.resizeObserver?.disconnect()
+  },
+
   mounted() {
     this.updateRoute()
+
+    const dashboard = document.getElementById(this.idFolderTable) as HTMLElement
+    this.resizeObserver = new ResizeObserver(entries => {
+      this.updateFolderLayout()
+    })
+    this.resizeObserver.observe(dashboard)
   },
 })
 </script>
@@ -507,20 +683,14 @@ export default defineComponent({
 @import '@/styles.scss';
 
 .folder-browser {
-  padding: 0 0.5rem;
+  margin-top: 1rem;
+  padding: 0 0 0 0.5rem;
 }
+
 .vessel {
-  margin: 0 0;
-  padding: 0rem 0rem 2rem 0rem;
-  max-width: $dashboardWidth + 3;
-}
-
-.white {
-  background-color: var(--bgBold);
-}
-
-.cream {
-  background-color: var(--bgCream);
+  margin: 0 auto;
+  padding: 0rem 2rem 2rem 2rem;
+  max-width: 100rem;
 }
 
 h2 {
@@ -548,16 +718,13 @@ h4 {
 
 .viz-grid-item {
   z-index: 1;
-  // text-align: center;
-  margin: 4px 0 0 0;
+  margin: 4px 0 4px 0;
   padding: 0 0;
   display: flex;
   flex-direction: column;
   cursor: pointer;
   vertical-align: top;
   background-color: var(--bgCream5);
-  // border: var(--borderThin);
-  border-radius: 5px;
 }
 
 .viz-frame {
@@ -567,7 +734,8 @@ h4 {
   z-index: 1;
   flex: 1;
   overflow: hidden;
-  padding: 5px 0 0 5px;
+  padding: 8px 0 5px 5px;
+
   p {
     margin: 0 0 0 0;
     line-height: 1rem;
@@ -581,7 +749,7 @@ h4 {
   }
 }
 
-.viz-frame:hover {
+.viz-element:hover {
   background-color: var(--bgPanel);
   transition: background-color 0.1s ease-in-out;
 }
@@ -596,21 +764,23 @@ h4 {
 
 .folder-table {
   display: grid;
-  gap: 4px;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-auto-flow: column;
+  grid-template-columns: repeat(auto-fill, max-content);
+  grid-template-rows: repeat(var(--num-rows, 20), min-content);
   list-style: none;
   margin-bottom: 0px;
   padding-left: 0px;
+  line-height: 1.1rem;
 }
 
 .folder {
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  background-color: var(--bgCream5);
-  padding: 0.25rem 0.75rem;
-  border-radius: 5px;
   word-wrap: break-word;
+  position: relative;
+  padding-left: 6px;
+  padding-right: 4px;
 }
 
 .folder:hover {
@@ -618,6 +788,12 @@ h4 {
   // box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.08), 0 3px 10px 0 rgba(0, 0, 0, 0.08);
   transition: background-color 0.1s ease-in-out;
   color: var(--yellowHighlight);
+}
+
+.up-folder {
+  // background-color: var(--bgBold);
+  padding-left: 6px;
+  font-weight: bold;
 }
 
 .file-table {
@@ -686,13 +862,17 @@ h3.curate-heading {
   z-index: 1;
   text-align: center;
   margin: 0 0;
-  padding: 0 0;
+  padding: 8px 2px 2px 2px;
   display: flex;
   flex-direction: column;
   cursor: pointer;
   vertical-align: top;
-  background-color: var(--bgBold);
+  border: 1px solid #0000;
+}
+
+.viz-image-grid-item:hover {
   border: var(--borderSymbology);
+  cursor: zoom-in;
 }
 
 .viz-image-frame {
@@ -706,7 +886,7 @@ h3.curate-heading {
 
   p {
     margin: auto 0 0 0;
-    background-color: var(--bgBold);
+    // background-color: var(--bgBold);
     font-size: 1rem;
     font-weight: bold;
     line-height: 1.2rem;
@@ -724,25 +904,148 @@ h3.curate-heading {
   transition: box-shadow 0.1s ease-in-out;
 }
 
-.viz-image-frame-component {
-  background-color: var(--bgPanel);
+// .viz-image-frame-component {
+//   background-color: #00000000;
+// }
+
+.v-filename {
+  margin: 0 0;
+  cursor: pointer;
 }
 
-p.v-filename {
-  margin: 5px 0;
+.viz-color-bar {
+  display: flex;
+  line-height: 16px;
 }
 
-p.v-plugin {
-  text-align: right;
+.v-plugin {
   text-transform: uppercase;
-  margin-left: auto;
   color: white;
-  background-color: var(--bgCream3);
-  padding: 2px 3px;
-  // border-radius: 0 0 4px 0;
+  padding: 2px 6px 1px 6px;
+  border-radius: 4px;
+  p {
+    margin-right: auto;
+  }
 }
 
-.up-folder {
-  background-color: var(--bgTreeItem);
+.is-favorite {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 25px 25px 0;
+  border-color: transparent #4444ff transparent transparent;
+  transform: rotate(0deg);
+}
+
+.is-favorite::after {
+  content: '★';
+  position: absolute;
+  top: -3px;
+  right: -23px;
+  font-size: 13px;
+  color: white;
+}
+
+.pointer {
+  cursor: pointer;
+}
+
+.az-title {
+  margin-top: 2.5rem;
+}
+
+.favorite-icon-this {
+  margin: auto -0.5rem auto 1rem;
+  opacity: 0.6;
+  font-size: 1.1rem;
+  color: #757bff;
+}
+
+.favorite-icon-this:hover {
+  cursor: pointer;
+}
+
+.is-thisfolderfavorite {
+  opacity: 1;
+  color: #4f58ff;
+  text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;
+}
+
+.file-cell {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+// ------------- narrow stuffs -----
+
+.vessel.narrow {
+  margin: 0 auto;
+  padding: 0rem 0.5rem 2rem 0.5rem;
+  max-width: 100rem;
+}
+
+.az-grid {
+  grid-template-columns: 1fr 1fr auto;
+  // grid-template-columns: auto-fit, auto-fit, auto;
+  // gap: 0 0.5rem;
+}
+.az-grid.narrow {
+  grid-template-columns: auto;
+}
+
+.az-cell {
+  word-wrap: break-word;
+  word-break: break-all;
+  max-width: 100%;
+  padding-right: 0;
+}
+
+.narrow .heading {
+  display: none;
+}
+
+.narrow .az-cell {
+  border: none;
+  padding: 0;
+}
+.narrow .az-row .sameFilename {
+  display: none;
+}
+.narrow .v-plugin {
+  border-bottom: var(--borderThin);
+  margin: 0px 0 1rem auto;
+  width: max-content;
+  font-size: 0.8rem;
+  padding: 0px 4px;
+}
+
+.folder-title {
+  margin-top: 1.5rem;
+}
+
+.image-zoom {
+  cursor: zoom-out;
+  text-align: center;
+  height: 80dvh;
+  max-width: 100%;
+}
+
+@media only screen and (max-width: 640px) {
+  .folder-browser {
+  }
+
+  .folder-table {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .folder {
+    padding: 0.25rem !important;
+    font-weight: 700;
+    color: var(--link);
+  }
 }
 </style>

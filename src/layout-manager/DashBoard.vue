@@ -2,10 +2,17 @@
 .dashboard(:class="{wiide, 'is-panel-narrow': isPanelNarrow, 'is-fullscreen-dashboard': isFullScreenDashboard }" :id="viewId")
   .dashboard-content(:class="{wiide, 'is-fullscreen-dashboard': isFullScreenDashboard}" :style="dashWidthCalculator")
 
-    .dashboard-header(v-if="!fullScreenCardId && (title + description)"
-      :class="{wiide, 'is-panel-narrow': isPanelNarrow}")
-      h2 {{ title }}
-      p {{ description }}
+    .dashboard-header.flex-row(v-if="!fullScreenCardId && (title + description)"
+      :class="{wiide, 'is-panel-narrow': isPanelNarrow}"
+    )
+      .cardtitles.flex1
+        h2 {{ title }}
+        p {{ description }}
+      .favstar
+        p.favorite-icon(title="Favorite"
+          :class="{'is-favorite': isFavorite}"
+          @click="clickedFavorite"
+        ): i.fa.fa-star
 
     .tabs.is-centered(v-if="subtabs.length")
       ul.tab-row
@@ -29,7 +36,7 @@
 
         //- card header/title
         .dash-card-headers(v-if="card.title + card.description" :class="{'fullscreen': !!fullScreenCardId}")
-          .header-labels
+          .header-labels(:style="{paddingLeft: card.type=='text' ? '4px' : ''}")
             h3 {{ card.title }}
             p(v-if="card.description") {{ card.description }}
 
@@ -58,14 +65,15 @@
           :id="card.id"
           :class="{'is-loaded': card.isLoaded}"
         )
-          component.dash-card(
+          component.dash-card(v-if="card.visible"
             :is="getCardComponent(card)"
             :fileSystemConfig="fileSystemConfig"
-            :subfolder="xsubfolder"
+            :subfolder="row.subtabFolder || xsubfolder"
             :files="fileList"
             :yaml="card.props.configFile"
             :config="card.props"
             :datamanager="datamanager"
+            :split="split"
             :style="{opacity: opacity[card.id]}"
             :cardId="card.id"
             :cardTitle="card.title"
@@ -75,7 +83,8 @@
             @titles="setCardTitles(card, $event)"
             @error="setCardError(card, $event)"
           )
-          .dash-card-errors(v-if="card.errors.length")
+          .error-text(v-if="card.errors.length")
+            span.clear-error(@click="card.errors=[]") &times;
             p(v-for="err,i in card.errors" :key="i") {{ err }}
 
 </template>
@@ -87,7 +96,9 @@ import type { PropType } from 'vue'
 import YAML from 'yaml'
 
 import globalStore from '@/store'
-import { FileSystemConfig, Status, YamlConfigs } from '@/Globals'
+import { sleep } from '@/js/util'
+
+import { FavoriteLocation, FileSystemConfig, Status, YamlConfigs } from '@/Globals'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
 
 import TopSheet from '@/components/TopSheet/TopSheet.vue'
@@ -115,6 +126,7 @@ export default defineComponent({
     xsubfolder: { type: String, required: true },
     allConfigFiles: { type: Object as PropType<YamlConfigs>, required: true },
     datamanager: { type: Object as PropType<DashboardDataManager>, required: true },
+    split: { type: Object, required: true }, // {y,x}
     gist: Object as any,
     config: Object as any,
     zoomed: Boolean,
@@ -125,12 +137,13 @@ export default defineComponent({
       description: '',
       viewId: 'dashboard-' + Math.floor(1e12 * Math.random()),
       yaml: {} as any,
-      rows: [] as { id: string; cards: any[] }[],
+      rows: [] as { id: string; cards: any[]; subtabFolder?: string }[],
       fileList: [] as string[],
       fileSystemConfig: {} as FileSystemConfig,
       fullScreenCardId: '',
       resizers: {} as { [id: string]: any },
       infoToggle: {} as { [id: string]: boolean },
+      isDestroying: false,
       isFullScreenDashboard: false,
       isResizing: false,
       opacity: {} as any,
@@ -159,6 +172,16 @@ export default defineComponent({
     fileApi(): HTTPFileSystem {
       return new HTTPFileSystem(this.fileSystemConfig)
     },
+    isFavorite(): any {
+      let key = this.root
+      if (this.xsubfolder) key += `/${this.xsubfolder}`
+      if (key.endsWith('/')) key = key.substring(0, key.length - 1)
+
+      const indexOfPathInFavorites = globalStore.state.favoriteLocations.findIndex(
+        f => key == f.fullPath
+      )
+      return indexOfPathInFavorites > -1
+    },
   },
 
   watch: {
@@ -172,13 +195,44 @@ export default defineComponent({
   },
 
   methods: {
+    clickedFavorite() {
+      let hint = `${this.root}/${this.xsubfolder}`
+      let finalFolder = this.xsubfolder || this.root
+      // remove current folder from subfolder
+      const lastSlash = hint.lastIndexOf('/')
+      if (lastSlash > -1) {
+        finalFolder = hint.substring(lastSlash + 1)
+        hint = hint.substring(0, lastSlash)
+      }
+
+      let fullPath = `${this.root}/${this.xsubfolder}`
+      if (fullPath.endsWith('/')) fullPath = fullPath.substring(0, fullPath.length - 1)
+
+      const favorite: FavoriteLocation = {
+        root: this.root,
+        subfolder: this.xsubfolder,
+        label: finalFolder,
+        fullPath,
+        hint,
+      }
+
+      this.$store.commit(this.isFavorite ? 'removeFavorite' : 'addFavorite', favorite)
+    },
+
     /**
      * This only gets triggered when a topsheet has some titles.
      * Remove the dashboard titles and use the ones from the topsheet.
      */
     setCardTitles(card: any, event: any) {
-      card.title = event
-      card.description = ''
+      if (!card || !event) return
+
+      if ('string' == typeof event) {
+        card.title = event
+        card.description = ''
+      } else {
+        if (event.title) card.title = event.title
+        if (event.description) card.description = event.description
+      }
     },
 
     setCardError(card: any, event: any) {
@@ -219,7 +273,7 @@ export default defineComponent({
       return files
     },
 
-    getCardComponent(card: { type: string }) {
+    getCardComponent(card: { type: string; title: string }) {
       // console.log(1, card)
       if (card.type === 'table' || card.type === 'topsheet') return 'TopSheet'
 
@@ -231,7 +285,8 @@ export default defineComponent({
       // might be a chart
       if (chartTypes.indexOf(card.type) > -1) return 'card-' + card.type
 
-      // or might be a vue component?
+      // or might be a vue component? TODO check matrix viewer
+      card.title = card.type ? `Unknown panel type "${card.type}"` : `Error: panel "type" not set`
       return undefined // card.type
     },
 
@@ -270,10 +325,7 @@ export default defineComponent({
       // markdown does not want a default height
       const defaultHeight = card.type === 'text' ? undefined : 300
 
-      // old version:  plotlyChartTypes[card.type] ? 300 : undefined
-
       const height = card.height ? card.height * 60 : defaultHeight
-
       const flex = card.width || 1
 
       let style: any = { flex: flex }
@@ -286,16 +338,19 @@ export default defineComponent({
         style.minHeight = `${height}px`
       }
 
+      // if there is only a single card on this panel, shrink its margin
+      if (this.rows.length == 1 && this.rows[0].cards.length == 1) {
+        style.margin = '0.25rem 0.25rem'
+      }
+
+      // but no actually, if it's full screen then do this.
       if (this.fullScreenCardId) {
         if (this.fullScreenCardId !== card.id) {
           style.display = 'none'
         } else {
           style = {
             position: 'absolute',
-            top: 0,
-            bottom: 0,
-            left: 0,
-            right: 0,
+            inset: '0 0 0 0',
             margin: '6px 0px', // '18px 1rem 0.5rem 1rem',
           }
         }
@@ -367,7 +422,7 @@ export default defineComponent({
       this.updateThemeAndLabels()
 
       // if there are subtabs, prepare them
-      if (this.yaml.subtabs) this.setupSubtabs()
+      if (this.yaml.subtabs) this.subtabs = await this.setupSubtabs()
 
       this.setFullScreen()
 
@@ -388,51 +443,90 @@ export default defineComponent({
       this.selectTabLayout()
     },
 
-    setupSubtabs() {
+    async setupSubtabs() {
       // YAML definition of subtabs can be:
       // 1) false/missing: no subtabs.
       // 2) true: convert each row property of the layout to a subtab
-      // 3) array[] of row IDs that comprise each subtab, e.g.
+      // 3) array of dashboard*.yaml filenames: each subtab will contain the
+      //     imported dashboard contents
+      // 4) array[] of row IDs that comprise each subtab, so you can combine rows as you wish
+      //
       //    subtabs:
       //    - title: 'Tab1'
       //      rows: ['modeshare','statistics']
       //
-      // In cases 2 and 3, this.subtabs will hold an array with the
-      // title and layout object for each subtab.
+      // this.subtabs will then hold an array with the title and layout object for each subtab.
 
       let i = 1
-      this.subtabs = []
-      const allRowKeys = new Set(Object.keys(this.yaml.layout))
+      const subtabs = [] as any
 
+      // "TRUE": convert each layout row to a subtab ------------------
       if (this.yaml.subtabs === true) {
         // One subtab per layout object.
+        const allRowKeys = new Set(Object.keys(this.yaml.layout))
         for (const rowKey of allRowKeys) {
-          this.subtabs.push({ title: rowKey, layout: this.yaml.layout[rowKey] })
+          subtabs.push({ title: rowKey, layout: this.yaml.layout[rowKey] })
         }
-      } else {
-        // subtabs array explicitly assigns rows to subtabs
-        for (const tab of this.yaml.subtabs) {
-          this.subtabs.push({
-            title: this.getObjectLabel(tab, 'title'),
-            layout: tab.rows.map((rowName: string) => {
-              allRowKeys.delete(rowName)
-              return this.yaml.layout[rowName]
-            }),
-          })
-        }
-        // if user missed any rows, add them at the end
-        for (const leftoverKey of allRowKeys) {
-          this.subtabs.push({ title: leftoverKey, layout: this.yaml.layout[leftoverKey] })
-        }
+        return subtabs
       }
+
+      // Not an array? Fail. -----------------------------------------------------
+      if (!Array.isArray(this.yaml.subtabs)) {
+        console.warn('SUBTABS: Not an array', this.yaml.subtabs)
+        return []
+      }
+
+      // "Array of filepaths": load each dashboard as a subtab --------------
+      if (typeof this.yaml.subtabs[0] == 'string') {
+        this.yaml.layout = []
+        for (const filename of this.yaml.subtabs) {
+          // get full path to the dashboard file
+          const fullpath = `${this.xsubfolder}/${filename}`
+          // also get the working directory of that dashboard file
+          const subtabWorkingDirectory = fullpath.substring(0, fullpath.lastIndexOf('/'))
+
+          try {
+            const raw = await this.fileApi.getFileText(fullpath)
+            const dashContent = YAML.parse(raw)
+            const subtab = {
+              title: dashContent.header.tab || dashContent.header.title || filename,
+              description: dashContent.description,
+              layout: dashContent.layout,
+              subtabFolder: subtabWorkingDirectory,
+            } as any
+            subtabs.push(subtab)
+          } catch (e) {
+            console.error('' + e)
+          }
+        }
+        return subtabs
+      }
+
+      // "Array of Objects": Each element is a layout object ------------
+      const allRowKeys = new Set(Object.keys(this.yaml.layout))
+      for (const tab of this.yaml.subtabs) {
+        subtabs.push({
+          title: this.getObjectLabel(tab, 'title'),
+          layout: tab.rows.map((rowName: string) => {
+            allRowKeys.delete(rowName)
+            return this.yaml.layout[rowName]
+          }),
+        })
+      }
+      for (const leftoverKey of allRowKeys) {
+        // if user missed any rows, add them at the end
+        subtabs.push({ title: leftoverKey, layout: this.yaml.layout[leftoverKey] })
+      }
+
+      return subtabs
     },
 
     selectTabLayout() {
       // Choose subtab or full layout
 
       if (this.subtabs.length && this.activeTab > -1) {
-        const subtab = this.subtabs[this.activeTab].layout
-        this.setupRows(subtab)
+        const subtab = this.subtabs[this.activeTab]
+        this.setupRows(subtab.layout, subtab.subtabFolder)
       } else if (this.yaml.layout) {
         this.setupRows(this.yaml.layout)
       } else {
@@ -443,7 +537,7 @@ export default defineComponent({
       }
     },
 
-    setupRows(layout: any) {
+    setupRows(layout: any, subtabFolder?: string) {
       let numCard = 1
 
       for (const rowId of Object.keys(layout)) {
@@ -480,6 +574,7 @@ export default defineComponent({
           Vue.set(this.opacity, card.id, 0.5)
           Vue.set(this.infoToggle, card.id, false)
           Vue.set(card, 'errors', [] as string[])
+          Vue.set(card, 'visible', false)
 
           // Card header could be hidden
           if (!card.title && !card.description) card.showHeader = false
@@ -488,8 +583,22 @@ export default defineComponent({
           numCard++
         })
 
-        this.rows.push({ id: rowId, cards })
+        this.rows.push({ id: rowId, cards, subtabFolder })
         this.rowFlexWeights.push(flexWeight)
+      }
+      this.slowRollTheCardAppearances()
+    },
+
+    async slowRollTheCardAppearances() {
+      for (const row of this.rows) {
+        for (const card of row.cards) {
+          // cancel if user ditches the page
+          if (this.isDestroying) return
+
+          card.visible = true
+          await this.$nextTick()
+          await sleep(200)
+        }
       }
       this.$emit('layoutComplete')
     },
@@ -542,7 +651,9 @@ export default defineComponent({
 
     handleResize() {
       const dashboard = document.getElementById(this.viewId) as HTMLElement
-      if (dashboard) this.isPanelNarrow = dashboard.clientWidth < 800
+      if (dashboard) {
+        this.isPanelNarrow = dashboard.clientWidth < 800
+      }
       this.setFullScreen()
       this.$store.commit('resize')
     },
@@ -551,6 +662,10 @@ export default defineComponent({
       if (this.isPanelNarrow) {
         // Narrow panels are never fullscreen
         this.isFullScreenDashboard = false
+        // Well, unless there's just one row
+        if (this.rows.length === 1) {
+          this.isFullScreenDashboard = true
+        }
       } else {
         // help user with capitalization
         this.isFullScreenDashboard =
@@ -587,12 +702,20 @@ export default defineComponent({
 
     this.fileList = await this.getFiles()
 
-    await this.setupDashboard()
-    // await this.$nextTick()
-    this.resizeAllCards()
+    try {
+      await this.setupDashboard()
+      // await this.$nextTick()
+      this.resizeAllCards()
+    } catch (e) {
+      console.error('oh nooo' + e)
+      this.$emit('error', 'Error setting up dashboard, check YAML?')
+    }
   },
+
   beforeDestroy() {
     this.resizers = {}
+    this.isDestroying = true
+    this.narrowPanelObserver?.disconnect()
     window.removeEventListener('resize', this.resizeAllCards)
   },
 })
@@ -613,6 +736,7 @@ export default defineComponent({
   .dashboard-content {
     max-width: $dashboardWidth;
     margin: 0 auto 0 auto;
+    margin-top: 1.25rem;
   }
 
   .dashboard-content.wiide {
@@ -620,12 +744,8 @@ export default defineComponent({
   }
 }
 
-// .dashboard.wiide {
-//   // padding-left: 1rem;
-// }
-
 .dashboard-header {
-  margin: 1rem 3rem 1rem 0rem;
+  margin: 0.25rem 2rem 1rem 0rem;
 
   h2 {
     line-height: 2.1rem;
@@ -636,10 +756,6 @@ export default defineComponent({
     line-height: 1.4rem;
   }
 }
-
-// .dashboard-header.wiide {
-//   // margin-right: 3rem;
-// }
 
 .dash-row {
   display: flex;
@@ -672,13 +788,18 @@ export default defineComponent({
   grid-auto-rows: auto auto 1fr;
   margin: 0 $cardSpacing $cardSpacing 0;
   background-color: var(--bgCardFrame);
-  padding: 2px 5px;
+  padding: 2px 3px 3px 3px;
   border-radius: 4px;
   overflow-x: auto;
 
   .dash-card-headers {
     display: flex;
     flex-direction: row;
+    line-height: 1.2rem;
+    padding: 3px 3px 2px 3px;
+    p {
+      margin-bottom: 0.1rem;
+    }
   }
 
   .dash-card-headers.fullscreen {
@@ -738,6 +859,7 @@ export default defineComponent({
   transition: opacity 0.5s;
   overflow-x: hidden;
   overflow-y: hidden;
+  border-radius: 2px;
 }
 
 // Observe for narrowness instead of a media-query
@@ -762,6 +884,7 @@ ul.tab-row {
   padding: 0 0;
   margin: 0 0;
   border-bottom: none;
+  font-size: 0.9rem;
 }
 
 li.tab-entry b a {
@@ -777,23 +900,65 @@ li.is-not-active b a {
   color: var(--text);
 }
 
-.dash-card-errors {
+.error-text {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
   background-color: var(--bgError);
-  color: var(--textBold);
+  color: #800;
   border: 1px solid var(--bgCream4);
-  margin-bottom: 2px;
-  padding: 0.75rem 0.5rem;
-  z-index: 20000;
-  font-size: 0.95rem;
+  border-radius: 3px;
+  margin-bottom: 0px;
+  padding: 0.5rem 0.5rem;
+  z-index: 25000;
+  font-size: 0.9rem;
+  font-weight: bold;
   max-height: 50%;
   overflow-y: auto;
   p {
     line-height: 1.2rem;
     margin: 0 0;
+  }
+}
+
+.clear-error {
+  float: right;
+  font-weight: bold;
+  margin-right: 2px;
+  padding: 0px 5px;
+}
+
+.clear-error:hover {
+  cursor: pointer;
+  color: red;
+  background-color: #88888833;
+}
+
+.favorite-icon {
+  margin: auto -0.5rem auto 1rem;
+  opacity: 0.6;
+  font-size: 1.1rem;
+  color: #757bff;
+  // text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;
+}
+
+.is-favorite {
+  opacity: 1;
+  color: #4f58ff;
+  text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;
+}
+
+.favorite-icon:hover {
+  cursor: pointer;
+}
+
+@media only screen and (max-width: 640px) {
+  .cardtitles {
+    padding: 0 4px;
+  }
+  .tabs {
+    margin-bottom: 0.5rem !important;
   }
 }
 </style>

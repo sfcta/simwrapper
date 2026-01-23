@@ -3,33 +3,37 @@
 
   p.load-error(v-show="loadErrorMessage" @click="authorizeAfterError"): b {{ loadErrorMessage }}
 
-  .tabholder(v-if="isShowingBreadcrumbs && !isMultipanel && !isZoomed" :style="dashWidthCalculator")
-    .tabholdercontainer.white-text
-      .project-header(v-if="header" v-html="header")
-      .project-path(v-else)
-        .nav-title
-          p.title-text {{ finalFolder }}
-          p.favorite-icon(
-            @click="clickedFavorite"
-            title="Favorite"
-            :class="{'is-favorite': isFavorite}"
-          ): i.fa.fa-star
-        bread-crumbs.breadcrumbs(
-            :root="root"
-            :subfolder="xsubfolder"
-            @navigate="onNavigate"
-            @crumbs="updateCrumbs"
-        )
+  .project-header(v-if="header" v-html="header")
 
+  //-- Main area --------------
   .dashboard-finder(:class="{isMultipanel, isZoomed}")
-    ul.dashboard-right-sections(v-show="!isZoomed && Object.keys(dashboards).length > 1")
+
+    //-- Vertical list of dashboard tabs -- one for each dashboard-*.yaml
+    ul.dashboard-right-sections(v-show="!isZoomed && Object.keys(dashboards).length > 1 && !isMobile")
       li.tab-list(v-for="tab,index in Object.keys(dashboards)" :key="tab"
         :class="{'is-active': tab===activeTab, 'is-not-active': tab!==activeTab}"
         :style="{opacity: tab===activeTab ? 1.0 : 0.75}"
         @click="switchLeftTab(tab,index)"
       )
-        a(v-if="dashboards[tab].header" @click="switchLeftTab(tab,index)") {{ dashboards[tab].header.tab }}
+        a(v-if="dashboards[tab].header"
+          @click="switchLeftTab(tab,index)"
+        ) {{ dashboards[tab].header.tab }}
 
+    //- mobile: dashboard dropdown-button
+    .dashboard-mobile-section(v-show="!isZoomed && Object.keys(dashboards).length > 1 && isMobile")
+      .dropdown
+        b-button.dropbtn(@click="dropDownClicked()") {{ dashboards[activeTab].header.tab || 'Dashboards' }}
+          i.fa.fa-caret-down
+
+        .dropdown-content(v-if="showDropDown")
+          li(v-for="tab,index in Object.keys(dashboards)" :key="tab"
+            :class="{'is-active': tab===activeTab, 'is-not-active': tab!==activeTab}"
+            :style="{opacity: tab===activeTab ? 1.0 : 0.75}"
+            @click="switchLeftTab(tab,index)"
+          )
+            a(v-if="dashboards[tab].header" @click="switchLeftTab(tab,index)") {{ dashboards[tab].header.tab }}
+
+    //-- The actual dashboard for this tab (if there is one) ------------------
     .dashboard-content(
       v-if="dashboardTabWithDelay && dashboardTabWithDelay !== 'FILE__BROWSER' && dashboards[dashboardTabWithDelay] && dashboards[dashboardTabWithDelay].header.tab !== '...'"
       :class="{'is-breadcrumbs-hidden': !isShowingBreadcrumbs && !isZoomed}"
@@ -41,10 +45,12 @@
         :datamanager="dashboardDataManager"
         :zoomed="isZoomed"
         :allConfigFiles="allConfigFiles"
+        :split="split"
         @zoom="handleZoom"
         @layoutComplete="handleLayoutComplete"
       )
 
+    //-- No dashboard? Show folder browser ---------
     folder-browser.dashboard-folder-browser(v-if="dashboardTabWithDelay && dashboardTabWithDelay === 'FILE__BROWSER'"
       :root="root"
       :xsubfolder="xsubfolder"
@@ -54,7 +60,7 @@
     )
 
   footer.footer-holder(v-show="showFooter && !isZoomed" :class="{wiide}" :style="dashWidthCalculator")
-    .tabholdercontainer(:class="{wiide}")
+    .tab-holder-container(:class="{wiide}")
       .project-footer(v-if="footer" v-html="footer" :class="{wiide}")
 
 </template>
@@ -64,7 +70,6 @@ import Vue, { defineComponent } from 'vue'
 
 import markdown from 'markdown-it'
 import micromatch from 'micromatch'
-import DOMPurify from 'dompurify'
 import YAML from 'yaml'
 
 import globalStore from '@/store'
@@ -90,6 +95,7 @@ export default defineComponent({
     root: { type: String, required: true },
     xsubfolder: { type: String, required: true },
     isMultipanel: { type: Boolean, required: false },
+    split: { type: Object, required: true }, // {y,x}
   },
   data: () => {
     return {
@@ -111,6 +117,9 @@ export default defineComponent({
       pageHeader: '',
       showFooter: false,
       styleElement: null as any,
+      isMobile: false,
+      mediaQuery: null as any,
+      showDropDown: false,
       // project site navigation
       leftNavItems: null as null | {
         top: NavigationItem[]
@@ -155,6 +164,7 @@ export default defineComponent({
     isFavorite(): any {
       let key = this.root
       if (this.xsubfolder) key += `/${this.xsubfolder}`
+      if (key.endsWith('/')) key = key.substring(0, key.length - 1)
 
       const indexOfPathInFavorites = this.globalState.favoriteLocations.findIndex(
         f => key == f.fullPath
@@ -194,6 +204,11 @@ export default defineComponent({
     },
 
     onNavigate(options: any) {
+      // make sure folders have a trailing slash or relative paths in markdown files die
+      if (options?.props?.xsubfolder) {
+        if (!options.props.xsubfolder.endsWith('/')) options.props.xsubfolder += '/'
+      }
+
       this.$emit('navigate', options)
       this.setTitle()
     },
@@ -203,16 +218,18 @@ export default defineComponent({
       // remove current folder from subfolder
       hint = hint.substring(0, hint.lastIndexOf('/'))
 
+      let fullPath = `${this.root}/${this.xsubfolder}`
+      if (fullPath.endsWith('/')) fullPath = fullPath.substring(0, fullPath.length - 1)
+
       const favorite: FavoriteLocation = {
         root: this.root,
         subfolder: this.xsubfolder,
         label: this.finalFolder,
-        fullPath: `${this.root}/${this.xsubfolder}`,
+        fullPath,
         hint,
       }
 
       this.$store.commit(this.isFavorite ? 'removeFavorite' : 'addFavorite', favorite)
-      if (this.isFavorite) this.$store.commit('setShowLeftBar', true)
     },
 
     async getFolderReadme() {
@@ -252,6 +269,10 @@ export default defineComponent({
           }
         })
 
+        // headers, footers, etc
+        await this.setupProjectConfig()
+        await this.$nextTick()
+
         if (showDashboards) {
           for (const fullPath of Object.values(this.allConfigFiles.dashboards)) {
             // add the tab now
@@ -263,26 +284,28 @@ export default defineComponent({
           }
         }
 
-        // headers, footers, etc
-        await this.setupProjectConfig()
-
         // Add FileBrowser as "Files" tab
         if (this.globalState.isShowingFilesTab) {
           Vue.set(this.dashboards, 'FILE__BROWSER', { header: { tab: 'Files' } })
         }
 
         // // Start on correct tab
+        const dashboardKeys = Object.keys(this.dashboards)
         if (this.$route.query.tab) {
-          try {
-            const userSupplied = parseInt('' + this.$route.query.tab) - 1
-            const userTab = Object.keys(this.dashboards)[userSupplied]
-            this.activeTab = userTab || Object.keys(this.dashboards)[0]
-          } catch (e) {
-            // user spam; just use first tab
-            this.activeTab = Object.keys(this.dashboards)[0]
+          if (this.$route.query.tab === 'files') {
+            this.activeTab = 'FILE__BROWSER'
+          } else {
+            try {
+              const userSupplied = parseInt('' + this.$route.query.tab) - 1
+              const userTab = dashboardKeys[userSupplied]
+              this.activeTab = userTab || dashboardKeys[0]
+            } catch (e) {
+              // user spam; just use first tab
+              this.activeTab = dashboardKeys[0]
+            }
           }
         } else {
-          this.activeTab = Object.keys(this.dashboards)[0]
+          this.activeTab = dashboardKeys[0]
         }
         this.dashboardTabWithDelay = this.activeTab
       } catch (e) {
@@ -324,13 +347,8 @@ export default defineComponent({
           }
 
           // always reveal quickview bar unless told not to
-          if (yaml.hideLeftBar === true) {
+          if (yaml.hideLeftBar || yaml.hideSideBar) {
             this.$store.commit('setShowLeftBar', false)
-            this.$store.commit('setShowLeftStrip', false)
-          }
-          if (yaml.hideLeftBar === false) {
-            this.$store.commit('setShowLeftBar', true)
-            this.$store.commit('setShowLeftStrip', true)
           }
 
           // theme
@@ -349,8 +367,13 @@ export default defineComponent({
           }
 
           // Breadcrumb-Bar. Delicious!
-          this.isShowingBreadcrumbs = !yaml.hideBreadcrumbs
-          // if (yaml.hideBreadcrumbs) this.isShowingBreadcrumbs = false
+          if (yaml.hideBreadcrumbs || yaml.hideBreadCrumbs) {
+            this.$store.commit('setShowBreadcrumbs', false)
+            this.isShowingBreadcrumbs = false
+          } else {
+            this.$store.commit('setShowBreadcrumbs', true)
+            this.isShowingBreadcrumbs = true
+          }
 
           // TOP Nav Bar -----------------------------------
           if (yaml.topNavBar) {
@@ -390,7 +413,6 @@ export default defineComponent({
 
             // User defined a leftNavBar: so make it visible
             this.$store.commit('setShowLeftBar', true)
-            this.$store.commit('setShowLeftStrip', false)
             this.$store.commit('setLeftNavItems', this.leftNavItems)
 
             this.$emit('activate', {
@@ -422,7 +444,6 @@ export default defineComponent({
           // note parsing error and move on
           const msg = `Error reading ${filename}: ` + e
           this.$emit('error', msg)
-          console.error(msg)
         }
       }
 
@@ -506,7 +527,7 @@ export default defineComponent({
         // console.log('DASHBOARD:', fullPath)
         return true
       } catch (e) {
-        this.$emit('error', { type: Status.ERROR, msg: '' + e })
+        this.$emit('error', `Error parsing: ${fullPath}`)
         return false
       }
     },
@@ -527,6 +548,9 @@ export default defineComponent({
 
     updateCrumbs(props: { crumbs: any[]; finalFolder: string }) {
       this.finalFolder = props.finalFolder || ''
+      if (this.finalFolder !== this.$store.state.windowTitle) {
+        this.$store.commit('setWindowTitle', this.finalFolder)
+      }
       this.crumbs = props.crumbs
     },
 
@@ -551,6 +575,8 @@ export default defineComponent({
           this.$router.replace({ query: {} })
         }
       }, 125)
+
+      this.showDropDown = false
     },
 
     handleZoom(isZoomed: any) {
@@ -574,6 +600,14 @@ export default defineComponent({
       }
 
       return svnProject[0]
+    },
+
+    async dropDownClicked() {
+      if (this.showDropDown) {
+        this.showDropDown = false
+      } else {
+        this.showDropDown = true
+      }
     },
 
     goUpOneFolder() {
@@ -618,6 +652,12 @@ export default defineComponent({
   mounted() {
     this.updateRoute()
     this.setTitle()
+    this.mediaQuery = window.matchMedia('(max-width: 640px)')
+    if (this.mediaQuery.matches) {
+      this.isMobile = true
+    } else {
+      this.isMobile = false
+    }
   },
   beforeDestroy() {
     if (this.dashboardDataManager) this.dashboardDataManager.clearCache()
@@ -637,8 +677,7 @@ export default defineComponent({
   right: 0;
   display: flex;
   flex-direction: column;
-  background-color: var(--bgDashboard);
-  flex-direction: column;
+  background-image: var(--bgSplashPage);
 }
 
 .centered-vessel.wiide {
@@ -655,19 +694,16 @@ export default defineComponent({
   border-bottom-color: var(--bgDashboard);
 }
 
-.tabholder {
-  z-index: 50;
-  padding: 0.75rem 0rem 0.25rem 0rem;
-}
+// .tabholder {
+//   // z-index: 50;
+//   // padding: 0.5rem 0rem 0.5rem 0rem;
+// }
 
-.tabholdercontainer {
+.tab-holder-container {
   margin: 0 $cardSpacing;
-  display: flex;
-  flex-direction: row;
-  // background-image: linear-gradient(45deg, #0c8ed3, #8f00ff);
 }
 
-.tabholdercontainer.wiide {
+.tab-holder-container.wiide {
   margin: 0 0rem;
 }
 
@@ -675,17 +711,23 @@ li.is-not-active b a {
   color: var(--textBlack);
 }
 
+@media screen and (max-width: 640px) {
+  .dashboard-finder {
+    flex-direction: column !important;
+  }
+}
+
 .dashboard-finder {
   display: flex;
   flex: 1;
-  flex-direction: row-reverse;
-  padding: 0 $cardSpacing;
+  flex-direction: row;
+  padding: 0.5rem 0.25rem 0 0.25rem; // $cardSpacing;
   position: relative;
   overflow-y: auto;
 }
 
 .dashboard-finder.isMultipanel {
-  margin: 0 0.5rem;
+  margin: 0 0rem;
 }
 
 .dashboard-finder.isZoomed {
@@ -696,7 +738,7 @@ li.is-not-active b a {
 .dashboard-right-sections {
   display: flex;
   flex-direction: column;
-  padding: 1.5rem 0rem 2rem 0rem;
+  padding: 1.25rem 2rem 2rem 1rem;
 }
 
 .dashboard-content {
@@ -709,19 +751,18 @@ li.is-not-active b a {
 }
 
 .dashboard-folder-browser {
-  // margin: 2rem 2rem 1rem 1rem;
-  // padding-top: 1rem;
   flex: 1;
 }
 
 .tab-list {
   font-family: $fancyFont;
-  font-size: 0.9rem;
-  line-height: 1.1rem;
-  padding: 3px 0.5rem 5px 0.5rem;
-  border-right: 5px solid #00000000;
+  font-size: 1rem;
+  line-height: 0.9rem;
+  padding: 8px 0.5rem 8px 0.5rem;
+  border-left: 5px solid #00000000;
   user-select: none;
   margin-bottom: 1px;
+  border-radius: 5px 5px;
 
   a {
     color: var(--text);
@@ -735,9 +776,10 @@ li.is-not-active b a {
 
 .tab-list.is-active {
   background-color: var(--bgBold);
-  border-right: 5px solid var(--highlightActiveSection);
-  border-radius: 3px 0 0 3px;
+  border-left: 5px solid var(--highlightActiveSection);
+  border-radius: 5px 5px;
   font-weight: bold;
+
   a {
     color: var(--textBold);
   }
@@ -767,7 +809,7 @@ li.is-not-active b a {
 .project-header {
   margin-bottom: 1rem;
   color: var(--text);
-  padding: 1rem 0.5rem;
+  padding: 0rem 1rem;
 
   :deep(h1) {
     font-size: 3rem;
@@ -863,20 +905,26 @@ li.is-not-active b a {
 }
 
 .favorite-icon {
-  margin: auto 0 auto 1rem;
-  opacity: 0.3;
+  margin: auto -0.5rem auto 1rem;
+  opacity: 0.6;
   font-size: 1.1rem;
+  color: #757bff;
+  // text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;
 }
 
 .is-favorite {
   opacity: 1;
+  color: #4f58ff;
+  text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;
 }
+
 .favorite-icon:hover {
   cursor: pointer;
 }
 
 .breadcrumbs {
-  padding: 0.25rem 0;
+  flex: 1;
+  padding: 0;
   font-size: 0.9rem;
   color: var(--text);
 }
@@ -891,6 +939,7 @@ img {
 
 .white-text {
   color: white;
+
   h1,
   h2,
   h3,
@@ -898,6 +947,44 @@ img {
   h5,
   h6 {
     color: white;
+  }
+}
+
+.dropbtn {
+  background-color: $appTag;
+  color: white;
+  padding: 0 18px !important;
+  border: none;
+}
+
+.dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.dropdown-content {
+  position: absolute;
+  background-color: #f1f1f1;
+  min-width: 100px;
+  box-shadow: 0px 8px 16px 0px rgba(0, 0, 0, 0.2);
+  z-index: 1;
+}
+
+.dropdown-content a {
+  color: black;
+  padding: 5px 5px;
+  text-decoration: none;
+  display: block;
+}
+
+.fa,
+.fas {
+  padding-left: 5px;
+}
+
+@media only screen and (max-width: 640px) {
+  .dashboard-mobile-section {
+    margin: 0rem 0.25rem -0.75rem 0.1rem;
   }
 }
 </style>

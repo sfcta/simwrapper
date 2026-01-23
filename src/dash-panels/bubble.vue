@@ -3,7 +3,6 @@ VuePlotly.yplot(
   :data="data"
   :layout="layout"
   :options="options"
-  :id="id"
 )
 </template>
 
@@ -37,6 +36,7 @@ export default defineComponent({
       // dataSet is either x,y or allRows[]
       dataSet: {} as { x?: any[]; y?: any[]; allRows?: any },
       id: 'bubble-' + Math.floor(1e12 * Math.random()),
+      colorMap: {} as { [category: string]: string },
       layout: {
         height: 300,
         margin: { t: 8, b: 0, l: 0, r: 0, pad: 2 },
@@ -102,7 +102,10 @@ export default defineComponent({
     this.$emit('isLoaded')
   },
   beforeDestroy() {
-    this.datamanager?.removeFilterListener(this.config, this.handleFilterChanged)
+    this.datamanager?.removeFilterListener(
+      { ...this.config, subfolder: this.subfolder },
+      this.handleFilterChanged
+    )
   },
 
   watch: {
@@ -128,13 +131,16 @@ export default defineComponent({
       if (!this.datamanager) return {}
 
       try {
-        let dataset = await this.datamanager.getDataset(this.config)
+        let dataset = await this.datamanager.getDataset(this.config, { subfolder: this.subfolder })
 
         // no filter? we are done
         if (!this.config.filters) return dataset
 
         // filter data before returning:
-        this.datamanager.addFilterListener(this.config, this.handleFilterChanged)
+        this.datamanager.addFilterListener(
+          { ...this.config, subfolder: this.subfolder },
+          this.handleFilterChanged
+        )
 
         for (const [column, value] of Object.entries(this.config.filters)) {
           const filter: FilterDefinition = {
@@ -148,6 +154,7 @@ export default defineComponent({
         // empty for now; filtered data will come back later via handleFilterChanged async.
         return { allRows: {} }
       } catch (e) {
+        this.$emit('error', `Error loading: ${this.subfolder}/${this.config.dataset}`)
         console.error('' + e)
       }
       return { allRows: {} }

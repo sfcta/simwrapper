@@ -5,7 +5,7 @@
   .widgets
     .widget
         p.tight Display
-        b-select.selector(expanded v-model="dataColumn")
+        b-select.selector(size="is-small" expanded v-model="dataColumn")
           option(label="Single color" value="@")
 
           optgroup(v-for="dataset in datasetChoices"
@@ -22,7 +22,7 @@
   .widgets(v-if="datasetChoices.length > 1")
     .widget
         p.tight Join by
-        b-select.selector(expanded v-model="join")
+        b-select.selector(size="is-small" expanded v-model="join")
           option(label="None" value="")
           option(label="Row count" value="@count")
 
@@ -36,7 +36,7 @@
   .widgets(v-if="dataColumn && dataColumn.length > 1")
     .widget
         p.tight Normalize by
-        b-select.selector(expanded v-model="normalSelection")
+        b-select.selector(size="is-small" expanded v-model="normalSelection")
           option(label="None" value="")
           optgroup(v-for="dataset in datasetChoices" :key="dataset" :label="dataset")
             option(v-for="column in columnsInDataset(dataset)"
@@ -45,12 +45,29 @@
               :label="column"
             )
 
+  //- TRANSPARENCY COLUMN
+  .widgets(v-if="dataColumn && dataColumn.length > 1")
+    .widget
+        p.tight Transparency (0.0-1.0)
+        b-select.selector(size="is-small" expanded v-model="transparencyColumn")
+          option(label="None" value="@")
+
+          optgroup(v-for="dataset in datasetChoices"
+                   :key="dataset"
+                   :label="dataset"
+          )
+            option(v-for="column in columnsInDataset(dataset)"
+                   :key="`${dataset}/${column}`"
+                   :value="`${dataset}/${column}`"
+                   :label="column"
+            )
+
   //- DIFF MODE
   .more(:title="diffChoices.length<2 ? 'Add two datasets to enable comparisons' : ''")
     .widgets
       .widget(style="flex: 3")
         p.tight Compare datasets
-        b-select.selector(
+        b-select.selector(size="is-small"
           :disabled="!dataColumn || diffChoices.length<2"
           expanded
           v-model="diffUISelection"
@@ -77,7 +94,7 @@
     .widgets
       .widget(style="flex: 3")
         p Steps
-        b-input(v-model="steps"
+        b-input(size="is-small" v-model="steps"
             placeholder="Number"
             type="number"
             min="2"
@@ -103,10 +120,11 @@
 <script lang="ts">
 import { defineComponent } from 'vue'
 import type { PropType } from 'vue'
+import { debounce } from 'debounce'
 
 import globalStore from '@/store'
 import { VizLayerConfiguration, DataTable, DataType } from '@/Globals'
-import { Style, Ramp, colorRamp } from '@/js/ColorsAndWidths'
+import { Style, Ramp, getColorRampHexCodes } from '@/js/ColorsAndWidths'
 
 export interface FillColorDefinition {
   dataset: string
@@ -116,21 +134,24 @@ export interface FillColorDefinition {
   diffDatasets?: string[]
   relative?: boolean
   join?: string
+  transparency?: string
   colorRamp?: Ramp
   fixedColors: string[]
 }
 
 const ALL_COLOR_RAMPS = [
   { ramp: 'Viridis', style: Style.sequential, reverse: true }, // , reverse: true },
+  { ramp: 'Cividis', style: Style.sequential, reverse: true }, // , reverse: true },
   { ramp: 'Plasma', style: Style.sequential, reverse: true }, // , reverse: true },
+  { ramp: 'Turbo', style: Style.sequential, reverse: true }, // , reverse: true },
   { ramp: 'Blues', style: Style.sequential }, // , reverse: true },
   { ramp: 'Greens', style: Style.sequential }, // , reverse: true },
   { ramp: 'Purples', style: Style.sequential }, // , reverse: true },
   { ramp: 'Oranges', style: Style.sequential }, // , reverse: true },
-  { ramp: 'RdBu', style: Style.diverging, reverse: true },
-  { ramp: 'PRGn', style: Style.diverging, reverse: true },
   { ramp: 'Tableau10', style: Style.categorical }, // , reverse: true },
   { ramp: 'Paired', style: Style.categorical }, // , reverse: true },
+  { ramp: 'RdBu', style: Style.diverging, reverse: true },
+  { ramp: 'PRGn', style: Style.diverging, reverse: true },
   // { ramp: 'PuOr', style: Style.diverging }, // , reverse: true },
 ]
 
@@ -161,11 +182,13 @@ export default defineComponent({
     return {
       globalState: globalStore.state,
       dataColumn: '',
+      transparencyColumn: '@',
       datasetLabels: [] as string[],
       diffDatasets: [] as string[],
       diffRelative: false,
       diffUISelection: '',
       diffChoices: [] as any[],
+      emitColorSpecification: {} as any,
       flip: false,
       isCurrentlyDiffMode: false,
       join: '',
@@ -177,6 +200,8 @@ export default defineComponent({
     }
   },
   mounted() {
+    this.emitColorSpecification = debounce(this.emitColorSpecificationDebounced, 150)
+
     this.selectedSingleColor = this.simpleColors[0]
     this.selectedColor = this.colorChoices[0]
     this.datasetLabels = Object.keys(this.vizConfiguration.datasets)
@@ -197,6 +222,9 @@ export default defineComponent({
       this.diffSelectionChanged()
     },
     dataColumn() {
+      this.emitColorSpecification()
+    },
+    transparencyColumn() {
       this.emitColorSpecification()
     },
     join() {
@@ -312,7 +340,7 @@ export default defineComponent({
       this.isCurrentlyDiffMode = !!this.diffUISelection
     },
 
-    emitColorSpecification() {
+    emitColorSpecificationDebounced() {
       // no fill
       if (!this.dataColumn) return
 
@@ -353,6 +381,7 @@ export default defineComponent({
         },
       } as any
 
+      if (this.transparencyColumn !== '@') fill.transparency = this.transparencyColumn
       if (this.diffDatasets.length) fill.diffDatasets = this.diffDatasets
       if (this.diffRelative) fill.relative = true
 
@@ -360,7 +389,7 @@ export default defineComponent({
         fill.colorRamp.breakpoints = this.vizConfiguration.display?.fill?.colorRamp?.breakpoints
       }
 
-      setTimeout(() => this.$emit('update', { fill }), 50)
+      this.$emit('update', { fill })
     },
 
     clickedSingleColor(swatch: string) {
@@ -374,7 +403,7 @@ export default defineComponent({
 
       // the viewer is on main thread so lets make
       // sure user gets some visual feedback
-      setTimeout(() => this.$emit('update', { fill }), 25)
+      this.$emit('update', { fill })
     },
 
     columnsInDataset(datasetId: string): string[] {
@@ -393,7 +422,7 @@ export default defineComponent({
     },
 
     buildColors(scale: Ramp, count?: number): string[] {
-      let colors = [...colorRamp(scale, count || parseInt(this.steps))]
+      let colors = [...getColorRampHexCodes(scale, count || parseInt(this.steps))]
 
       // many reasons to flip the colorscale:
       // (1) the scale preset; (2) the checkbox (3) dark mode

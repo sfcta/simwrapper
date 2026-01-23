@@ -17,6 +17,8 @@ import {
 import fileSystems from '@/fileSystemConfig'
 import { MAP_STYLES_ONLINE, MAP_STYLES_OFFLINE } from '@/Globals'
 
+import Gamepad from '@/js/Gamepad'
+
 // ----------------------------------------
 // ViewState has tricky logic, to handle cold-start, view-start,
 // and interactive motion.
@@ -36,12 +38,20 @@ const initialViewState = () => {
     longitude: 13.45,
     latitude: 52.5,
     zoom: 7,
+    // longitude: -122.435,
+    // latitude: 37.75,
+    // zoom: 7,
     pitch: 0,
     bearing: 0,
     maxZoom: 24,
   }
 }
 
+const isMainThread = typeof window !== 'undefined'
+const initialLeftSection = isMainThread ? localStorage.getItem('activeLeftSection') || '' : ''
+const gamepad = isMainThread ? parseInt(localStorage.getItem('gamepadAxis') || '1') : 1
+
+// console.log('INITIAL LEFT SECTION', initialLeftSection)
 export default new Vuex.Store({
   state: {
     app: 'SimWrapper',
@@ -50,15 +60,18 @@ export default new Vuex.Store({
     breadcrumbs: [] as BreadCrumb[],
     credentials: { fake: 'fake' } as { [url: string]: string },
     dashboardWidth: '',
+    gamepad,
+    activeLeftSection: initialLeftSection,
     isFullScreen: false,
     isFullWidth: true,
-    isShowingLeftBar: false,
-    isShowingLeftStrip: true,
+    isShowingLeftBar: true,
     isShowingFilesTab: true,
     isDarkMode: true,
+    isShowingBreadcrumbs: true,
     isInitialViewSet: false,
     favoriteLocations: [] as FavoriteLocation[],
     fileHandleAccessRequests: [] as any[],
+    flaskConfig: {} as { storage?: any; readme?: string; tagline?: string; zones?: any },
     leftNavItems: null as null | {
       top: NavigationItem[]
       middle: NavigationItem[]
@@ -73,11 +86,12 @@ export default new Vuex.Store({
     visualizationTypes: new Map() as Map<string, VisualizationPlugin>,
     colorScheme: ColorScheme.DarkMode,
     locale: 'en',
-    localFileHandles: [] as any[],
+    localFileHandles: [] as { key: string; handle: any }[],
     localURLShortcuts: {} as { [id: string]: FileSystemConfig },
     runFolders: {} as { [root: string]: any[] },
     runFolderCount: 0,
     resizeEvents: 0,
+    windowTitle: '',
     topNavItems: null as null | {
       fileSystem: FileSystemConfig
       subfolder: string
@@ -112,6 +126,10 @@ export default new Vuex.Store({
       // console.log('PLUGIN:', value.kebabName)
       state.visualizationTypes.set(value.kebabName, value)
     },
+    setActiveLeftSection(state, value: string) {
+      state.activeLeftSection = value
+      if (isMainThread) localStorage.setItem('activeLeftSection', value)
+    },
     setBreadCrumbs(state, value: BreadCrumb[]) {
       state.breadcrumbs = value
     },
@@ -120,6 +138,10 @@ export default new Vuex.Store({
       state.credentials[value.url] = creds
       state.authAttempts++
     },
+    setFlaskConfig(state, json: { storage?: any; readme?: string; tagline?: string; zones?: any }) {
+      state.flaskConfig = json
+    },
+
     setFullScreen(state, value: boolean) {
       state.isFullScreen = value
     },
@@ -135,8 +157,8 @@ export default new Vuex.Store({
     setShowLeftBar(state, value: boolean) {
       state.isShowingLeftBar = value
     },
-    setShowLeftStrip(state, value: boolean) {
-      state.isShowingLeftStrip = value
+    setShowBreadcrumbs(state, value: boolean) {
+      state.isShowingBreadcrumbs = value
     },
     setTopNavItems(
       state,
@@ -159,8 +181,8 @@ export default new Vuex.Store({
     setMapCamera(
       state,
       value: {
-        longitude: number
-        latitude: number
+        longitude?: number
+        latitude?: number
         bearing: number
         pitch: number
         zoom: number
@@ -170,8 +192,10 @@ export default new Vuex.Store({
         startup?: boolean
       }
     ) {
-      let honorIt = false
+      // enable gamepad
+      Gamepad.start()
 
+      let honorIt = false
       // always honor a jump request
       if (value.jump) honorIt = true
       // honor an initial request IFF we are in startup state
@@ -181,7 +205,21 @@ export default new Vuex.Store({
 
       if (honorIt) {
         // remove logic, just keep camera settings
-        const { jump, startup, initial, ...camera } = value
+        const { jump, startup, initial, ...camera } = value as any
+        // make sure every combo of center,lat,lng works
+        if (camera.center?.lng) {
+          camera.longitude = camera.center.lng
+          camera.latitude = camera.center.lat
+        }
+        if (camera.center?.[0]) {
+          camera.longitude = camera.center[0]
+          camera.latitude = camera.center[1]
+          camera.center = { lng: camera.longitude, lat: camera.latitude }
+        }
+        if (!camera.center) {
+          camera.center = { lng: camera.longitude, lat: camera.latitude }
+        }
+
         state.viewState = camera
         state.isInitialViewSet = true
       } else {
@@ -216,7 +254,7 @@ export default new Vuex.Store({
 
       state.isDarkMode = state.colorScheme === ColorScheme.DarkMode
 
-      localStorage.setItem('colorscheme', state.colorScheme)
+      if (isMainThread) localStorage.setItem('colorscheme', state.colorScheme)
       document.body.style.backgroundColor =
         state.colorScheme === ColorScheme.LightMode ? '#edebe4' : '#2d3133'
     },
@@ -228,15 +266,15 @@ export default new Vuex.Store({
 
       state.isDarkMode = state.colorScheme === ColorScheme.DarkMode
 
-      localStorage.setItem('colorscheme', state.colorScheme)
+      if (isMainThread) localStorage.setItem('colorscheme', state.colorScheme)
       document.body.style.backgroundColor =
         state.colorScheme === ColorScheme.LightMode ? '#edebe4' : '#2d3133'
     },
     setLocale(state, value: string) {
       state.locale = value.toLocaleLowerCase()
-      localStorage.setItem('locale', state.locale)
+      if (isMainThread) localStorage.setItem('locale', state.locale)
     },
-    addLocalFileSystem(state, value: any) {
+    addLocalFileSystem(state, value: { key: string; handle: any }) {
       state.localFileHandles.unshift(value)
     },
     setLocalFileSystem(state, value: any) {
@@ -255,13 +293,13 @@ export default new Vuex.Store({
 
       try {
         const KEY = 'projectShortcuts'
-        let existingRoot = localStorage.getItem(KEY) || ('{}' as any)
+        let existingRoot = isMainThread ? localStorage.getItem(KEY) || ('{}' as any) : {}
 
         let roots = JSON.parse(existingRoot)
         delete roots[shortcut]
         console.log('NEW ROOTS', roots)
 
-        localStorage.setItem(KEY, JSON.stringify(roots))
+        if (isMainThread) localStorage.setItem(KEY, JSON.stringify(roots))
       } catch (e) {
         // you failed
         console.error('' + e)
@@ -290,7 +328,8 @@ export default new Vuex.Store({
       state.favoriteLocations = [...state.favoriteLocations]
 
       try {
-        localStorage.setItem('favoriteLocations', JSON.stringify(state.favoriteLocations))
+        if (isMainThread)
+          localStorage.setItem('favoriteLocations', JSON.stringify(state.favoriteLocations))
       } catch (e) {
         console.error('' + e)
       }
@@ -303,7 +342,8 @@ export default new Vuex.Store({
       if (exists > -1) state.favoriteLocations.splice(exists, 1)
 
       try {
-        localStorage.setItem('favoriteLocations', JSON.stringify(state.favoriteLocations))
+        if (isMainThread)
+          localStorage.setItem('favoriteLocations', JSON.stringify(state.favoriteLocations))
       } catch (e) {
         console.error('' + e)
       }
@@ -326,8 +366,25 @@ export default new Vuex.Store({
     toggleFullWidth(state) {
       state.isFullWidth = !state.isFullWidth
     },
+    setWindowTitle(state, title: string) {
+      if (title !== state.windowTitle) {
+        state.windowTitle = title
+        document.title = title ? title + ' - SimWrapper' : 'SimWrapper'
+      }
+    },
+    setGamepad(state, value: number) {
+      state.gamepad = value
+      if (isMainThread) localStorage.setItem('gamepadAxis', value.toString())
+    },
   },
-  actions: {},
+  actions: {
+    gamepadSetup() {
+      Gamepad.setup()
+    },
+    gamepadStop() {
+      Gamepad.stop()
+    },
+  },
   modules: {},
   getters: {
     mapStyle: state => {

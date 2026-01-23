@@ -5,7 +5,6 @@
     :data="traces"
     :layout="layout"
     :options="options"
-    :id="id"
   )
 
 </template>
@@ -27,16 +26,21 @@ import globalStore from '@/store'
 import VuePlotly from '@/components/VuePlotly.vue'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
 import DashboardDataManager from '@/js/DashboardDataManager'
-import { colorRamp, Ramp } from '@/js/ColorsAndWidths'
+import { getColorRampHexCodes } from '@/js/ColorsAndWidths'
 import { mergeTypedArrays } from '@/js/util'
 import {
   FileSystemConfig,
   UI_FONT,
   BG_COLOR_DASHBOARD,
+  BG_COLOR_PLOTLY_FACETS,
   DataTable,
   DataSet,
   DataTableColumn,
 } from '@/Globals'
+
+interface Layout {
+  [key: string]: any
+}
 
 const MyComponent = defineComponent({
   name: 'PlotlyPlugin',
@@ -62,6 +66,19 @@ const MyComponent = defineComponent({
       traces: [] as any[],
       prevWidth: -1,
       prevHeight: -1,
+      attributeColorMap: new Map(),
+      colorway: [
+        '#1f77b4', // muted blue
+        '#ff7f0e', // safety orange
+        '#2ca02c', // cooked asparagus green
+        '#d62728', // brick red
+        '#9467bd', // muted purple
+        '#8c564b', // chestnut brown
+        '#e377c2', // raspberry yogurt pink
+        '#7f7f7f', // middle gray
+        '#bcbd22', // curry yellow-green
+        '#17becf',
+      ],
       // DataManager might be passed in from the dashboard; or we might be
       // in single-view mode, in which case we need to create one for ourselves
       myDataManager: this.datamanager || new DashboardDataManager(this.root, this.subfolder),
@@ -94,13 +111,16 @@ const MyComponent = defineComponent({
           title: { text: '', standoff: 16 },
           animate: true,
           rangemode: 'tozero',
+          matches: 'y',
+          anchor: 'x2',
         },
         legend: {
           orientation: 'v',
           x: 1,
           y: 1,
         },
-      },
+        grid: { rows: 1, columns: 1 },
+      } as Layout,
       // Plotly options
       options: {
         displaylogo: false,
@@ -130,6 +150,7 @@ const MyComponent = defineComponent({
       minYValue: Number.POSITIVE_INFINITY,
       maxXValue: Number.NEGATIVE_INFINITY,
       maxYValue: Number.NEGATIVE_INFINITY,
+      isUsingFacets: false,
     }
   },
 
@@ -154,7 +175,6 @@ const MyComponent = defineComponent({
     'globalState.resizeEvents'() {
       this.changeDimensions({})
     },
-
     resize(event: any) {
       this.changeDimensions(event)
     },
@@ -168,12 +188,14 @@ const MyComponent = defineComponent({
     await this.getVizDetails()
     // only continue if we are on a real page and not the file browser
     if (this.thumbnail) return
+
     try {
       if (this.vizDetails.datasets) await this.prepareData()
       if (this.vizDetails.traces) this.traces = this.vizDetails.traces
 
       // merge user-supplied layout with SimWrapper layout defaults
       if (this.vizDetails.layout) this.mergeLayouts()
+
       if (this.vizDetails.fixedRatio) {
         this.vizDetails.layout.xaxis = Object.assign(this.vizDetails.layout.xaxis, {
           constrain: 'domain',
@@ -184,6 +206,7 @@ const MyComponent = defineComponent({
           scaleration: 1,
         })
       }
+
       // Backwards compatiblity with the older "dropdownMenu" option
       if (this.vizDetails.dropdownMenu) this.vizDetails.interactive = 'dropdown'
       // create interactive elements
@@ -193,11 +216,18 @@ const MyComponent = defineComponent({
     } catch (err) {
       const e = err as any
       console.error({ e })
+      this.$emit('error', '' + e)
       this.loadingText = '' + e
     }
     this.updateTheme()
     window.addEventListener('resize', this.changeDimensions)
     this.layout.margin = { r: 0, t: 8, b: 0, l: 50, pad: 2 }
+    this.createFacets()
+
+    // Fix: If two x axes are used, the x-axis labels are not displayed correctly.
+    if (Array.isArray(this.traces[0].x[0])) {
+      this.layout.xaxis.autotickangles = [0, 90]
+    }
   },
 
   beforeDestroy() {
@@ -292,7 +322,11 @@ const MyComponent = defineComponent({
         mergedLayout.yaxis.automargin = true
         mergedLayout.yaxis.autorange = true
         mergedLayout.yaxis.animate = true
-        if (!mergedLayout.yaxis.rangemode) mergedLayout.yaxis.rangemode = 'tozero'
+
+        // bug #357: scatterplots fail if rangemode is set
+        if (!this.traces.find(a => a?.type == 'scatter')) {
+          if (!mergedLayout.yaxis.rangemode) mergedLayout.yaxis.rangemode = 'tozero'
+        }
         if (!mergedLayout.yaxis.title) mergedLayout.yaxis.title = this.layout.yaxis.title
       } else {
         mergedLayout.yaxis = this.layout.yaxis
@@ -307,7 +341,314 @@ const MyComponent = defineComponent({
       } else {
         mergedLayout.yaxis2 = this.layout.yaxis2
       }
+
       this.layout = mergedLayout
+    },
+
+    // This method checks if facet_col and/or facet_row are defined in the traces
+    createFacets() {
+      if (this.traces[0].facet_col == undefined && this.traces[0].facet_row == undefined) return
+
+      // Set different bg colors for facet plots to seperate them from each other
+      this.isUsingFacets = true
+      this.updateTheme()
+
+      let facet_col = [] as any[]
+      let facet_row = [] as any[]
+
+      if (this.traces[0].facet_col != undefined)
+        facet_col = this.traces[0].facet_col.filter(
+          (element: any, index: any) => this.traces[0].facet_col.indexOf(element) === index
+        )
+      if (this.traces[0].facet_row != undefined)
+        facet_row = this.traces[0].facet_row.filter(
+          (element: any, index: any) => this.traces[0].facet_row.indexOf(element) === index
+        )
+
+      this.groupTracesByFacets(facet_col, facet_row)
+
+      // If the plot is interactive, the traces are displayed in one plot so the grid is set to 1x1
+      if (this.vizDetails.interactive == 'dropdown') {
+        this.layout.grid = { rows: 1, columns: 1 }
+        this.createMenus(this.vizDetails.interactive)
+      }
+    },
+    // If facet_col and/or facet_row are defined in the traces, this method groups the traces by the facets
+    groupTracesByFacets(facet_col: any[], facet_row: any[]) {
+      const yAxisTitle = this.layout.yaxis.title
+      const xAxisTitle = this.layout.xaxis.title
+      const result = []
+      let numRows = facet_row.length
+      let numCols = facet_col.length
+
+      if (numRows == 0) numRows = 1
+      if (numCols == 0) numCols = 1
+
+      // Create facet traces if there are multiple rows but only one column
+      if (facet_col.length == 0) {
+        result.push(
+          ...this.groupTracesByFacetsForOneColumnOrRow(
+            numRows,
+            yAxisTitle,
+            facet_row,
+            'y',
+            'facet_row'
+          )
+        )
+      } else if (facet_row.length == 0) {
+        result.push(
+          ...this.groupTracesByFacetsForOneColumnOrRow(
+            numCols,
+            xAxisTitle,
+            facet_col,
+            'x',
+            'facet_col'
+          )
+        )
+      } else {
+        result.push(
+          ...this.groupTracesByFacetsColumnsAndRows(
+            numCols,
+            numRows,
+            facet_col,
+            facet_row,
+            xAxisTitle,
+            yAxisTitle
+          )
+        )
+      }
+
+      this.layout.margin = { t: 10, b: 20, l: 60, r: 60, pad: 2 }
+      this.layout.grid = { rows: numRows, columns: numCols }
+      this.traces = result
+    },
+
+    assignColor(filterTrace: any) {
+      if (this.attributeColorMap.has(filterTrace.legendgroup)) {
+        return this.attributeColorMap.get(filterTrace.legendgroup)
+      } else {
+        const colorIndex = this.attributeColorMap.size % this.colorway.length
+        const color = this.colorway[colorIndex]
+        this.attributeColorMap.set(filterTrace.legendgroup, color)
+        return color
+      }
+    },
+
+    // If only one column or one row is defined in the traces, this method groups the traces by the facet
+    groupTracesByFacetsColumnsAndRows(
+      numberOfColumns: number,
+      numberOfRows: number,
+      facet_col: any[],
+      facet_row: any[],
+      xAxisTitle: string,
+      yAxisTitle: string
+    ) {
+      const result = []
+      for (let i = 0; i < numberOfRows; i++) {
+        for (let j = 0; j < numberOfColumns; j++) {
+          const row = facet_row[i]
+          const col = facet_col[j]
+          const filteredTraces = []
+
+          for (const trace of this.traces) {
+            const filteredX = []
+            const filteredY = []
+
+            for (let l = 0; l < trace.facet_row.length; l++) {
+              if (trace.facet_row[l] === row && trace.facet_col[l] === col) {
+                filteredX.push(trace.x[l])
+                filteredY.push(trace.y[l])
+              }
+            }
+
+            const filterTrace = {
+              ...trace,
+              x: filteredX,
+              y: filteredY,
+              xaxis: i > 0 ? 'x' + (i + 1) : 'x',
+              yaxis: j > 0 ? 'y' + (j + 1) : 'y',
+            }
+
+            delete filterTrace.facet_row
+            delete filterTrace.facet_col
+
+            // showlegend
+            filterTrace.showlegend = i === 0 && j === 0
+
+            // legendgroup
+            filterTrace.legendgroup = filterTrace.group_name
+            delete filterTrace.group_name
+
+            // filterTrace.marker.color = '#123456'
+            const color = this.assignColor(filterTrace)
+            filterTrace.marker = {
+              color: color,
+            }
+
+            filteredTraces.push(filterTrace)
+          }
+
+          let xAxisIndex = i === 0 ? 'xaxis' : 'xaxis' + (i + 1)
+          let yAxisIndex = j === 0 ? 'yaxis' : 'yaxis' + (j + 1)
+
+          // Left: Axis Text
+          if (this.layout[yAxisIndex] == undefined) {
+            this.layout[yAxisIndex] = {
+              title: {
+                text:
+                  yAxisTitle +
+                  '<br>' +
+                  this.config.traces[0].facet_row.split('.')[1] +
+                  ' = ' +
+                  facet_row[i],
+              },
+              anchor: 'y',
+              autorange: true,
+            }
+          } else {
+            this.layout[yAxisIndex].title = ''
+            this.layout[yAxisIndex].title = {
+              text:
+                yAxisTitle +
+                '<br>' +
+                this.config.traces[0].facet_row.split('.')[1] +
+                ' = ' +
+                facet_row[i],
+            }
+            this.layout[yAxisIndex].anchor = 'y'
+          }
+
+          // Bottom: Axis Text
+          if (this.layout[xAxisIndex] == undefined) {
+            this.layout[xAxisIndex] = {
+              title: {
+                text:
+                  xAxisTitle +
+                  '<br>' +
+                  this.config.traces[0].facet_col.split('.')[1] +
+                  ' = ' +
+                  facet_col[j],
+              },
+              anchor: 'x',
+              autorange: true,
+            }
+          } else {
+            this.layout[xAxisIndex].title = ''
+            this.layout[xAxisIndex].title = {
+              text:
+                xAxisTitle +
+                '<br>' +
+                this.config.traces[0].facet_col.split('.')[1] +
+                ' = ' +
+                facet_col[j],
+            }
+            this.layout[xAxisIndex].anchor = 'x'
+          }
+          result.push(...filteredTraces)
+        }
+      }
+      return result
+    },
+
+    // THis method groups the traces by the facet if more than one column and one row is defined in the traces
+    groupTracesByFacetsForOneColumnOrRow(
+      numberOfFacets: number,
+      axisTitle: any,
+      facets: any[],
+      axis: string,
+      facetObjectKey: string
+    ) {
+      // Extract text from the axis title
+      if (axisTitle instanceof Object && 'text' in axisTitle) axisTitle = axisTitle.text
+
+      const result = []
+      for (let j = 0; j < numberOfFacets; j++) {
+        const row = facets[j]
+        const filteredTraces = []
+
+        for (const trace of this.traces) {
+          const filteredX = []
+
+          for (let l = 0; l < trace[facetObjectKey].length; l++) {
+            if (trace[facetObjectKey][l] === row) {
+              filteredX.push(trace[axis == 'x' ? 'y' : 'x'][l])
+            }
+          }
+
+          let filterTrace = { ...trace }
+
+          // If the the plot is interactive (e. g. dropdown menu), the traces are displayed in one plot
+          if (this.vizDetails.interactive == 'dropdown' && this.isUsingFacets) {
+            filterTrace = {
+              ...trace,
+              x: axis == 'y' ? filteredX : trace.x,
+              y: axis == 'x' ? filteredX : trace.y,
+              xaxis: axis == 'y',
+              yaxis: axis == 'y',
+            }
+          } else {
+            filterTrace = {
+              ...trace,
+              x: axis == 'y' ? filteredX : trace.x,
+              y: axis == 'x' ? filteredX : trace.y,
+              xaxis: axis == 'y' ? 'x' : j > 0 ? 'x' + (j + 1) : 'x',
+              yaxis: axis == 'y' ? (j > 0 ? 'y' + (j + 1) : 'y') : 'y',
+            }
+          }
+
+          delete filterTrace.facet_row
+          delete filterTrace.facet_col
+
+          // showlegend
+          if (this.vizDetails.interactive == 'dropdown' && this.isUsingFacets) {
+            filterTrace.showlegend = true
+          } else {
+            filterTrace.showlegend = j === 0
+          }
+
+          // legendgroup
+          filterTrace.legendgroup = filterTrace.group_name
+          delete filterTrace.group_name
+          filterTrace.facet_name = row
+
+          const color = this.assignColor(filterTrace)
+          filterTrace.marker = {
+            color: color,
+          }
+
+          filteredTraces.push(filterTrace)
+        }
+
+        let label = this.config.traces[0][facetObjectKey].split('.')[1] + ' = ' + facets[j]
+
+        // Insert an additional line break if the label is presumably too long
+        // This does not known about the actual width of the plot
+        if (numberOfFacets * label.length > 150 && axis == 'x') {
+          const idx = label.indexOf(' = ')
+          label = label.substring(0, idx) + '<br>' + label.substring(idx)
+        }
+
+        // Left: Axis Text
+        const axisIndex = j === 0 ? axis + 'axis' : axis + 'axis' + (j + 1)
+        if (this.layout[axisIndex] == undefined) {
+          this.layout[axisIndex] = {
+            title: {
+              text: axisTitle + (axisTitle ? '<br>' : '') + label,
+            },
+          }
+        } else {
+          if (!this.vizDetails.interactive) {
+            this.layout[axisIndex].title = ''
+            this.layout[axisIndex].title = {
+              text: axisTitle + (axisTitle ? '<br>' : '') + label,
+            }
+            this.layout[axisIndex].anchor = 'y'
+          }
+        }
+
+        result.push(...filteredTraces)
+      }
+      return result
     },
 
     createMenus(mode: string) {
@@ -320,15 +661,21 @@ const MyComponent = defineComponent({
 
       const n = Object.values(this.traces).length
 
+      // If the plot is a facetplot the dropdown menu should be created based on the facet_name. otherwise based on the group_name
+      let dropdownLabel = 'group_name'
+      if (this.vizDetails.interactive == 'dropdown' && this.isUsingFacets) {
+        dropdownLabel = 'facet_name'
+      }
+
       Object.values(this.traces).forEach((tr, idx) => {
         // restore the indended legend label
         if ('original_name' in tr) {
           tr.name = tr.original_name
         }
 
-        if (!(tr.group_name in groups)) groups[tr.group_name] = []
+        if (!(tr[dropdownLabel] in groups)) groups[tr[dropdownLabel]] = []
 
-        groups[tr.group_name].push(idx)
+        groups[tr[dropdownLabel]].push(idx)
 
         tr.visible = false
       })
@@ -385,7 +732,9 @@ const MyComponent = defineComponent({
     updateTheme() {
       const colors = {
         paper_bgcolor: BG_COLOR_DASHBOARD[this.globalState.colorScheme],
-        plot_bgcolor: BG_COLOR_DASHBOARD[this.globalState.colorScheme],
+        plot_bgcolor: this.isUsingFacets
+          ? BG_COLOR_PLOTLY_FACETS[this.globalState.colorScheme]
+          : BG_COLOR_DASHBOARD[this.globalState.colorScheme],
         font: { color: this.globalState.isDarkMode ? '#cccccc' : '#444444' },
       }
       this.layout = Object.assign({}, this.layout, colors)
@@ -405,12 +754,15 @@ const MyComponent = defineComponent({
       const config = this.yamlConfig ?? ''
       const filename = config.indexOf('/') > -1 ? config : this.subfolder + '/' + config
 
-      const text = await this.fileApi.getFileText(filename)
-      const parsed = yaml.parse(text)
-
-      this.vizDetails = parsed
-      if (!this.vizDetails.title) this.vizDetails.title = 'Chart'
-      this.$emit('title', this.vizDetails.title)
+      try {
+        const text = await this.fileApi.getFileText(filename)
+        const parsed = yaml.parse(text)
+        this.vizDetails = parsed
+        if (!this.vizDetails.title) this.vizDetails.title = 'Chart'
+        this.$emit('title', this.vizDetails.title)
+      } catch (e) {
+        this.$emit('error', '' + e)
+      }
     },
 
     async prepareData(): Promise<any> {
@@ -441,7 +793,6 @@ const MyComponent = defineComponent({
 
       const datasets = Object.values(this.vizDetails.datasets) as DataSet[]
       const traces = [] as any[]
-
       const color = this.getColors(this.vizDetails, this.vizDetails.traces.length)
 
       this.vizDetails.traces.forEach((tr: any, trIdx: number) => {
@@ -496,25 +847,30 @@ const MyComponent = defineComponent({
     async loadDataset(name: string, ds: DataSet): Promise<DataSet> {
       this.loadingText = 'Loading datasets...'
 
-      const csvData = await this.myDataManager.getDataset(
-        { dataset: ds.file },
-        { highPrecision: true }
-      )
+      try {
+        const csvData = await this.myDataManager.getDataset(
+          { dataset: ds.file },
+          { highPrecision: true, subfolder: this.subfolder }
+        )
 
-      ds.data = csvData.allRows
-      ds.name = name
+        ds.data = csvData.allRows
+        ds.name = name
 
-      this.vizDetails.datasets[name] = ds
-      this.transformData(ds)
+        this.vizDetails.datasets[name] = ds
+        this.transformData(ds)
 
-      return ds
+        return ds
+      } catch {
+        this.$emit('error', 'Error loading ' + ds.file)
+        return { file: name }
+      }
     },
 
     getColors(conf: any, n: number): null | string[] {
       if ('colorRamp' in conf) {
         const ramp = typeof conf.colorRamp === 'string' ? { ramp: conf.colorRamp } : conf.colorRamp
         // Produce at least two color or strange effects happen
-        return colorRamp(ramp, n >= 2 ? n : 2)
+        return getColorRampHexCodes(ramp, n >= 2 ? n : 2)
       }
 
       return null
@@ -532,8 +888,22 @@ const MyComponent = defineComponent({
         )
       }
 
+      // Rename values in pivot names column when pivot is used
+      if ('rename' in ds && ds.pivot) {
+        this.renameColumns(ds.data as DataTable, ds.rename, ds.pivot.namesTo || 'names')
+      }
+
+      if ('normalize' in ds) {
+        this.normalizeColumns(ds.data as DataTable, ds.normalize)
+      }
+
       if ('aggregate' in ds) {
         this.aggregateColumns(ds.data as DataTable, ds.aggregate.groupBy, ds.aggregate.target)
+      }
+
+      // Rename column headers when no pivot is used
+      if ('rename' in ds && !ds.pivot) {
+        this.renameHeaders(ds.data as DataTable, ds.rename)
       }
 
       if ('constant' in ds) {
@@ -643,6 +1013,62 @@ const MyComponent = defineComponent({
       })
     },
 
+    // Rename column headers by changing keys in the data table
+    renameHeaders(dataTable: DataTable, rename: any) {
+      if (!rename) return
+
+      Object.entries(rename).forEach(([oldName, newName]) => {
+        if (oldName in dataTable) {
+          const column = dataTable[oldName]
+          dataTable[newName as string] = { ...column, name: newName as string }
+          delete dataTable[oldName]
+        }
+      })
+    },
+
+    renameColumns(dataTable: DataTable, rename: any, column: string) {
+      // Rename values in one column
+      if (rename && column in dataTable) {
+        const values = dataTable[column].values
+        for (let i = 0; i < values.length; i++) {
+          if (values[i] in rename) {
+            values[i] = rename[values[i]]
+          }
+        }
+      }
+    },
+
+    normalizeColumns(dataTable: DataTable, normalize: any) {
+      // normalize values
+      if (normalize) {
+        const { groupBy, target } = normalize
+
+        const sumMap: { [key: string]: number } = {}
+
+        for (let i = 0; i < dataTable[target].values.length; i++) {
+          let key = ''
+          for (let j = 0; j < groupBy.length; j++) {
+            key += dataTable[groupBy[j]].values[i]
+          }
+
+          if (sumMap[key] === undefined) {
+            sumMap[key] = dataTable[target].values[i]
+          } else {
+            sumMap[key] += dataTable[target].values[i]
+          }
+        }
+
+        for (let i = 0; i < dataTable[target].values.length; i++) {
+          let key = ''
+          for (let j = 0; j < groupBy.length; j++) {
+            key += dataTable[groupBy[j]].values[i]
+          }
+
+          dataTable[target].values[i] /= sumMap[key]
+        }
+      }
+    },
+
     // Pivot wide to long format
     pivot(name: string, dataTable: DataTable, exclude: any[], valuesTo: string, namesTo: string) {
       // Columns to pivot
@@ -663,8 +1089,6 @@ const MyComponent = defineComponent({
 
       const n = dataTable[Object.keys(dataTable)[0]].values.length
 
-      //console.log('Columns', columns, 'Pivot', pivot, 'n', n)
-
       for (let i = 0; i < n; i++) {
         pivot.forEach(c => {
           exclude.forEach(c => columns[c].push(dataTable[c].values[i]))
@@ -672,8 +1096,6 @@ const MyComponent = defineComponent({
           values.push(dataTable[c].values[i])
         })
       }
-
-      //console.log('Columns', columns, 'Values', values, 'Names', names)
 
       exclude.forEach(c => {
         dataTable[c].values = columns[c]

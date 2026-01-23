@@ -90,6 +90,10 @@ export default defineComponent({
   },
 
   mounted() {
+    // Add zero values to the beginning of the 'allTimes' array to set the time values correctly.
+    this.allTimes.unshift(0)
+    this.range[0] = 0
+
     // Initialize component dimensions, initial values, and set up the resizer.
     this.getDimensions()
     this.setupInitialValues()
@@ -101,6 +105,7 @@ export default defineComponent({
   },
 
   beforeDestroy() {
+    this.resizer?.disconnect()
     // Remove event listeners for mouseup and mousemove before the component is destroyed.
     window.removeEventListener('mouseup', this.dragEnd)
     window.removeEventListener('mousemove', this.dragging)

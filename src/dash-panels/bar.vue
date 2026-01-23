@@ -3,7 +3,6 @@ VuePlotly.myplot(
   :data="data"
   :layout="layout"
   :options="options"
-  :id="id"
   :class="className"
 )
 
@@ -12,6 +11,7 @@ VuePlotly.myplot(
 <script lang="ts">
 import { defineComponent } from 'vue'
 import type { PropType } from 'vue'
+import { buildColors } from '@/js/ColorsAndWidths'
 
 import { FileSystemConfig, Status, BG_COLOR_DASHBOARD, UI_FONT } from '@/Globals'
 import DashboardDataManager, { FilterDefinition } from '@/js/DashboardDataManager'
@@ -42,6 +42,7 @@ export default defineComponent({
       className: '',
       // dataSet is either x,y or allRows[]
       dataSet: {} as { x?: any[]; y?: any[]; allRows?: any },
+      colorMap: {} as { [category: string]: string },
       YAMLrequirementsBar: { dataset: '', x: '' },
       layout: {
         barmode: 'overlay',
@@ -113,7 +114,10 @@ export default defineComponent({
     this.checkWarningsAndErrors()
   },
   beforeDestroy() {
-    this.datamanager?.removeFilterListener(this.config, this.handleFilterChanged)
+    this.datamanager?.removeFilterListener(
+      { ...this.config, subfolder: this.subfolder },
+      this.handleFilterChanged
+    )
   },
 
   watch: {
@@ -206,13 +210,16 @@ export default defineComponent({
 
       try {
         this.validateYAML()
-        let dataset = await this.datamanager.getDataset(this.config)
+        let dataset = await this.datamanager.getDataset(this.config, { subfolder: this.subfolder })
 
         // no filter? we are done:
         if (!this.config.filters) return dataset
 
         // filter data before returning:
-        this.datamanager.addFilterListener(this.config, this.handleFilterChanged)
+        this.datamanager.addFilterListener(
+          { ...this.config, subfolder: this.subfolder },
+          this.handleFilterChanged
+        )
 
         for (const [column, value] of Object.entries(this.config.filters)) {
           const filter: FilterDefinition = {
@@ -227,6 +234,7 @@ export default defineComponent({
         // empty for now; filtered data will come back later via handleFilterChanged async.
         return { allRows: {} }
       } catch (e) {
+        this.$emit('error', `Error loading: ${this.subfolder}/${this.config.dataset}`)
         console.error('' + e)
       }
       return { allRows: {} }
@@ -293,6 +301,9 @@ export default defineComponent({
         columns = columnNames.filter(col => col !== this.config.x).sort()
       }
 
+      // Build colors for each column of data
+      this.colorMap = buildColors(columns, this.config.colorRamp)
+
       // old legendname field
       if (this.config.legendName) this.config.legendTitles = this.config.legendName
       if (this.config.legendTitles?.length) useOwnNames = true
@@ -342,6 +353,7 @@ export default defineComponent({
           textposition: 'inside',
           automargin: true,
           opacity: 1.0,
+          marker: { color: this.colorMap[col] },
         })
       }
     },

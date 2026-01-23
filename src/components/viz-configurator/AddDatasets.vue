@@ -19,10 +19,10 @@
         option(v-for="filename in filesInFolder" :value="filename" :label="filename")
 
   br
-  .drop-zone
+  .drop-zone.flex-col
       b Or Drag and Drop any dataset file:
 
-      file-selector(
+      file-selector.flex1(
         :accept-extensions="validDataTypes.map(m => `.${m}`).join(',')"
         :multiple="true"
         :is-loading="isLoading"
@@ -41,8 +41,8 @@
               b {{ validDataTypes.join(', ')}}
 
           .section-bottom(slot="loader")
-            p Processing files<br/>
-            p please wait...
+            p: b Processing files<br/>
+            p: i Please wait...
 
       br
       p.center
@@ -137,7 +137,9 @@ export default defineComponent({
       for (const file of list) {
         let result = (await this.loadDataUrl(file)) as any
         const buffer = result.buffer || result
-        const dataTable = await this.processBuffer(file.name, buffer)
+        const data = await this.processBuffer(file.name, buffer)
+        // separate CSV comments from dataset columns
+        const { comments, ...dataTable } = data
 
         // create a human-readable key for this file based on filename
         let key = file.name
@@ -159,15 +161,12 @@ export default defineComponent({
       return new Promise<DataTable>((resolve, reject) => {
         const thread = new DataFetcherWorker()
         try {
-          thread.postMessage(
-            {
-              config: { dataset: name },
-              buffer,
-            },
-            [buffer]
-          )
-
           thread.onmessage = e => {
+            // wait for thread ready signal
+            if (e.data.ready) {
+              thread.postMessage({ config: { dataset: name }, buffer }, [buffer])
+              return
+            }
             thread.terminate()
             resolve(e.data)
           }
@@ -182,9 +181,9 @@ export default defineComponent({
       const url = await new Promise(resolve => {
         const reader = new FileReader()
         reader.readAsArrayBuffer(file)
-        reader.onload = (e: any) => {
+        reader.onload = async (e: any) => {
           const buffer = e.target.result
-          const unzipped = gUnzip(buffer)
+          const unzipped = await gUnzip(buffer)
           resolve(unzipped)
         }
       })
@@ -195,14 +194,17 @@ export default defineComponent({
       return new Promise<DataTable>((resolve, reject) => {
         const thread = new DataFetcherWorker()
         try {
-          thread.postMessage({
-            fileSystemConfig: this.fileSystem,
-            subfolder: this.subfolder,
-            files: this.filesInFolder,
-            config: { dataset },
-          })
-
           thread.onmessage = e => {
+            // wait for thread ready signal
+            if (e.data.ready) {
+              thread.postMessage({
+                fileSystemConfig: this.fileSystem,
+                subfolder: this.subfolder,
+                files: this.filesInFolder,
+                config: { dataset },
+              })
+              return
+            }
             thread.terminate()
             resolve(e.data)
           }
@@ -296,7 +298,7 @@ a {
   // top: -2px;
   text-align: center;
   // background-color: rgba($primColor, 0.01);
-  backdrop-filter: blur(35px) saturate(200%);
+  // backdrop-filter: blur(5px) saturate(200%);
   border: 2px dashed $primColor;
   border-radius: 5px;
   transition: all ease 300ms;

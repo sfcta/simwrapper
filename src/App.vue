@@ -1,13 +1,17 @@
 <template lang="pug">
 #main-app(:class="{'full-page-app' : true, 'dark-mode': isDarkMode}" )
 
+  //- top-nav-bar.top-bar(v-if="(!$store.state.topNavItems && !$store.state.leftNavItems)")
+
   .center-area(v-if="isFileSystemLoaded")
-    login-panel.login-panel
+    //- login-panel.login-panel
     router-view.main-content
     p.splash-label(v-if="showSplash") • Loading SimWrapper •
 
   .grant-permission-area(v-if="accessRequests.length")
-    p Grant access to local files to view this content:
+    .nudge.flex-col(style="line-height: 1.3rem;padding-right: 0.5rem")
+      p: b Grant your browser access to view these local files.
+      p(style="margin-top: 0.5rem") Allowing access gives SimWrapper read-only access to this folder on your computer. No data is ever uploaded or sent anywhere.
     button.button.is-small(@click="grantAccess") Grant access
 
 </template>
@@ -33,12 +37,9 @@ import maplibregl from 'maplibre-gl'
 import { get } from 'idb-keyval'
 
 import globalStore from '@/store'
-import { ColorScheme, MAPBOX_TOKEN, MAP_STYLES_OFFLINE } from '@/Globals'
-import { addLocalFilesystem } from '@/fileSystemConfig'
-
-import LoginPanel from '@/components/LoginPanel.vue'
-
 import plugins from '@/plugins/pluginRegistry'
+import { ColorScheme, MAPBOX_TOKEN, MAP_STYLES_OFFLINE } from '@/Globals'
+import { addInitialLocalFilesystems, addFlaskFilesystems } from '@/fileSystemConfig'
 
 // MAPBOX TOKEN
 // this is a required workaround to get the mapbox token assigned in TypeScript
@@ -59,7 +60,7 @@ plugins.forEach(p => {
 export default defineComponent({
   name: 'SimWrapper',
   i18n,
-  components: Object.assign({ LoginPanel }),
+  components: {},
   data: () => {
     return {
       state: globalStore.state,
@@ -104,16 +105,32 @@ export default defineComponent({
 
     // ------ Find Chrome Local File System roots ----
     setupLocalFiles() {
+      // only do this once
       if (globalStore.state.localFileHandles.length) return
 
       // this must be completed before the router-view initializes,
       // or we won't have any Chrome Local Files systems available
       get('fs').then(r => {
-        const lfsh = r as { key: string; handle: any }[]
-        if (lfsh && lfsh.length) {
-          for (const entry of lfsh) addLocalFilesystem(entry.handle, entry.key)
+        const localFileSystems = r as { key: string; handle: any }[]
+        if (localFileSystems && localFileSystems.length) {
+          addInitialLocalFilesystems(localFileSystems)
         }
-        this.isFileSystemLoaded = true
+
+        // If there are Flask filesystems, get those too
+        fetch('/_storage_')
+          .then(r => r.json())
+          .then(json => {
+            console.log('---Registering Flask filesystems', json.storage)
+            addFlaskFilesystems(json.storage)
+            globalStore.commit('setFlaskConfig', json)
+          })
+          .catch(e => {
+            console.log('---no flask filesystems found on this server')
+          })
+          .finally(() => {
+            // this signals that we have what we need and router-view can get started
+            this.isFileSystemLoaded = true
+          })
       })
     },
 
@@ -187,12 +204,15 @@ export default defineComponent({
 
     document.addEventListener('keydown', this.toggleUIPanels)
 
+    this.$store.dispatch('gamepadSetup')
+
     // remove the splasher after a bit
     this.splasher = setTimeout(() => {
       this.showSplash = false
     }, 5000)
   },
   beforeDestroy() {
+    this.$store.dispatch('gamepadStop')
     document.removeEventListener('keydown', this.toggleUIPanels)
     window.clearTimeout(this.splasher)
   },
@@ -203,9 +223,31 @@ export default defineComponent({
 @import '~/the-new-css-reset/css/reset.css';
 @import '~/lil-gui/dist/lil-gui.min.css';
 @import '~/maplibre-gl/dist/maplibre-gl.css';
+@import '~/bulma/css/bulma.min.css';
 @import '~/buefy/dist/buefy.css';
 
 @import '@/styles.scss';
+
+@font-face {
+  font-family: 'FiraSans';
+  src: url('/webfonts/Firava.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Figtree';
+  src: url('/webfonts/figtree-var.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Figtree';
+  src: url('/webfonts/figtree-italic-var.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: italic;
+}
 
 html {
   box-sizing: border-box;
@@ -222,6 +264,7 @@ html {
   font-family: $mainFont;
   height: 100%;
   overscroll-behavior: contain;
+  font-weight: 300;
 }
 
 h1,
@@ -253,17 +296,12 @@ canvas {
 }
 
 .top-bar {
-  width: 100%;
-  padding: 0 3rem;
-  margin: 0 auto;
-  max-width: $sizeVessel;
   transition: padding 0.2s ease-in-out, max-width 0.3s ease-in-out;
-  // box-shadow: 0px 6px 10px #00000048;
   z-index: 5;
 }
 
 .top-bar.full-page-app {
-  padding: 0 1rem;
+  padding: 0 0;
   max-width: unset;
 }
 
@@ -326,6 +364,7 @@ canvas {
 h2 {
   font-size: 2rem;
   font-weight: bold;
+  color: var(--text) !important;
 }
 
 h3 {
@@ -337,10 +376,18 @@ h4 {
   font-size: 1.15rem;
 }
 
+.column-selector {
+  select {
+    background-color: var(--bgColor) !important;
+    color: var(--text) !important;
+    border-color: #88888866 !important;
+  }
+}
+
 #main-app {
   display: grid;
   color: var(--text);
-  // background-color: yellow; // var(--bgPanel2);
+  background-color: var(--bgDashboard);
   grid-template-columns: 1fr;
   grid-template-rows: auto auto 1fr;
   margin: 0 0;
@@ -451,6 +498,7 @@ p.splash-label {
 
 .lil-gui .title {
   margin-bottom: 0px;
+  color: var(--textFancy);
 }
 
 .lil-gui .controller.string input {
@@ -459,11 +507,12 @@ p.splash-label {
 
 .markdown {
   p {
-    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+    line-height: 1.4rem;
   }
 
   strong {
-    color: var(--text);
+    color: var(--textBold);
     font-family: $fancyFont;
   }
 
@@ -473,12 +522,45 @@ p.splash-label {
   h4,
   h5,
   h6 {
-    font-weight: normal;
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+    color: var(--textFancy) !important;
+  }
+
+  h1 {
+    font-size: 1.8rem;
+    font-weight: bold;
+  }
+
+  h2 {
+    font-size: 1.5rem;
+    font-weight: bold;
+  }
+
+  h3 {
+    font-size: 1.3rem;
+    font-weight: bold;
+  }
+
+  h4 {
+    font-size: 1.1rem;
+    font-weight: bold;
+  }
+
+  h5 {
+    font-size: 1rem;
+    font-weight: bold;
   }
 
   ul {
     list-style: disc;
-    margin-top: 0.5rem;
+    margin: 0.5rem 0 0.5rem 0;
+    padding-left: 1.5rem;
+  }
+
+  ol {
+    list-style: decimal;
+    margin: 0.5rem 0 0.5rem 0;
     padding-left: 1.5rem;
   }
 
@@ -568,7 +650,8 @@ p.splash-label {
 .grant-permission-area {
   position: absolute;
   width: 100%;
-  padding: 1rem;
+  margin-top: 2rem;
+  padding: 2rem;
   background-color: #ffd15e;
   color: black;
   display: flex;
@@ -580,49 +663,28 @@ p.splash-label {
 }
 
 // MapLibre Logo
-.mapboxgl-ctrl-bottom-left {
-  filter: var(--opacityLogo);
-  color: var(--bgBold);
-  bottom: -5px;
-  left: unset;
-  right: 36px;
-  z-index: 0;
+.maplibregl-ctrl-attrib {
+  background-color: var(--bg) !important;
+  opacity: 0.6;
+  color: var(--text);
+  margin: 1px 0px 0px 1px !important;
+  border-radius: 2px !important;
+}
+maplibregl-ctrl-attrib-button {
+  color: white !important;
+  background-color: white !important;
 }
 
-// Mapbox Improve this Map attribution
-.mapboxgl-ctrl-bottom-right {
-  filter: var(--opacityAttribution);
-  right: 0rem;
-  bottom: 0rem;
-  left: unset;
-  z-index: 0;
-}
-
-.mapboxgl-popup-content {
-  background-color: var(--bgCream4);
-}
-
-.mapboxgl-popup-anchor-top .mapboxgl-popup-tip,
-.mapboxgl-popup-anchor-top-left .mapboxgl-popup-tip,
-.mapboxgl-popup-anchor-top-right .mapboxgl-popup-tip {
-  border-bottom-color: var(--bgCream4);
-}
-.mapboxgl-popup-anchor-bottom .mapboxgl-popup-tip,
-.mapboxgl-popup-anchor-bottom-left .mapboxgl-popup-tip,
-.mapboxgl-popup-anchor-bottom-right .mapboxgl-popup-tip {
-  border-top-color: var(--bgCream4);
-}
-.mapboxgl-popup-anchor-left .mapboxgl-popup-tip {
-  border-right-color: var(--bgCream4);
-}
-.mapboxgl-popup-anchor-right .mapboxgl-popup-tip {
-  border-left-color: var(--bgCream4);
-}
-.mapboxgl-ctrl.mapboxgl-ctrl-attrib {
-  background-color: var(--bgCream);
+.maplibregl-ctrl-attrib-inner {
+  color: var(--text);
   a {
-    color: var(--textPale);
+    color: var(--text);
   }
+}
+
+.maplibregl-popup-content {
+  background-color: var(--bgCream4);
+  color: var(--text);
 }
 
 // SCROLLBARS
@@ -632,19 +694,19 @@ p.splash-label {
 }
 
 /* Track */
-::-webkit-scrollbar-track {
-  background: #00000080;
-}
+// ::-webkit-scrollbar-track {
+//   // background: #00000080;
+// }
 
 /* Handle */
 ::-webkit-scrollbar-thumb {
   background: var(--bgScrollbar);
 }
 
-/* Handle on hover */
-::-webkit-scrollbar-thumb:hover {
-  background: #ffffff40;
-}
+// /* Handle on hover */
+// ::-webkit-scrollbar-thumb:hover {
+//   // background: #ffffff40;
+// }
 
 .deck-tooltip {
   position: 'static';
@@ -680,6 +742,11 @@ p.splash-label {
   background-color: unset;
   text-align: unset;
   height: unset;
+}
+
+.flex-col {
+  display: flex;
+  flex-direction: column;
 }
 
 .flex-row {
@@ -728,12 +795,110 @@ p.splash-label {
   top: 0;
 }
 
-@media only screen and (max-width: 640px) {
-  .top-bar {
-    padding-left: 1rem;
-    padding-right: 1rem;
-  }
+.katex-html {
+  display: none !important;
+}
 
+.mono {
+  font-family: monospace;
+  font-size: 13px;
+  line-height: 21px;
+}
+
+.mr1 {
+  margin-right: 1rem;
+}
+
+.ml1 {
+  margin-left: 1rem;
+}
+
+.mb1 {
+  margin-bottom: 1rem;
+}
+
+.az-title {
+  margin: 2rem 0 1rem 0;
+  font-weight: bold;
+  text-transform: uppercase;
+  // color: var(--textFancy);
+}
+
+.az-quick-start-items {
+  gap: 0.25rem;
+}
+
+.az-quick-item {
+  user-select: none;
+  border: 1px solid #00000000;
+  border-radius: 4px;
+  padding: 0.5rem 1.5rem;
+  text-align: center;
+  margin-top: 0.25rem;
+  line-height: 1.25rem;
+}
+
+.az-quick-item:hover {
+  cursor: pointer;
+  border: 1px solid #80808040;
+  background-color: #ffffff40;
+}
+
+.az-quick-item:active {
+  cursor: pointer;
+  border: 1px solid #80808040;
+  background-color: #ffffffaa;
+}
+
+.az-quick-icon {
+  font-size: 1.5rem;
+  color: var(--link);
+}
+
+.az-quick-label {
+  margin-top: 0.5rem;
+}
+
+.az-grid {
+  margin-bottom: 1rem;
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+}
+
+.az-cell {
+  padding: 0.35rem 2rem 0.35rem 0;
+  border-bottom: 1px solid #80808080;
+  line-height: 1.4rem;
+}
+.az-row {
+  display: contents;
+}
+.az-icon {
+  padding-right: 0.5rem;
+  font-size: 14px;
+}
+
+.linky {
+  color: var(--link);
+}
+
+.zcaps {
+  font-size: 18px;
+  text-transform: uppercase;
+}
+
+.heading {
+  margin-bottom: 0;
+}
+
+.scrolly {
+  overflow-y: auto;
+}
+.scrollx {
+  overflow-x: auto;
+}
+
+@media only screen and (max-width: 640px) {
   .breadcrumbs {
     padding-left: 1rem;
     padding-right: 1rem;

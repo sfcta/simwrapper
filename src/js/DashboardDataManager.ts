@@ -16,10 +16,14 @@ import { rollup } from 'd3-array'
 import globalStore from '@/store'
 import HTTPFileSystem from './HTTPFileSystem'
 import { DataTable, DataTableColumn, DataType, FileSystemConfig, Status } from '@/Globals'
-import { findMatchingGlobInFiles } from '@/js/util'
+import { findMatchingGlobInFiles, gUnzip, parseXML } from '@/js/util'
+import avro from '@/js/avro'
+import * as Comlink from 'comlink'
 
 import DataFetcherWorker from '@/workers/DataFetcher.worker.ts?worker'
 import RoadNetworkLoader from '@/workers/RoadNetworkLoader.worker.ts?worker'
+import WasmXmlNetworkParser from '@/workers/WasmXmlNetworkParser.worker.ts?worker'
+import Coords from './Coords'
 
 interface configuration {
   dataset: string
@@ -45,8 +49,9 @@ export interface FilterDefinition {
 export interface NetworkLinks {
   source: Float32Array
   dest: Float32Array
-  linkIds: any[]
+  id: any[]
   projection: String
+  linkId: any[]
 }
 
 // This tells us if our environment has the Chrome File System Access API, meaning we are in Chrome
@@ -62,15 +67,16 @@ export default class DashboardDataManager {
     this.fileApi = this._getFileSystem(this.root)
   }
 
-  private files: any[] = []
   private threads: Worker[] = []
   private subfolder = ''
   private root = ''
   private fileApi: FileSystemConfig
   private networks: { [id: string]: Promise<NetworkLinks> } = {}
+  private featureCollections: { [id: string]: any } = {}
 
   public kill() {
     for (const worker of this.threads) worker.terminate()
+    this.threads = []
   }
 
   public getFilteredDataset(config: { dataset: string }): { filteredRows: any[] | null } {
@@ -112,15 +118,19 @@ export default class DashboardDataManager {
    *               and may include other optional parameters as needed by the viz
    * @returns allRows object, containing a DataTableColumn for each column in this dataset
    */
-  public async getDataset(config: configuration, options?: { highPrecision: boolean }) {
+  public async getDataset(
+    config: configuration,
+    options?: { highPrecision?: boolean; subfolder?: string }
+  ) {
     try {
+      // now with subfolders we need to cache based on subfolder+filename
+      const cacheKey = `${options?.subfolder || this.subfolder}/${config.dataset}`
       // first, get the dataset
-      if (!this.datasets[config.dataset]) {
-        console.log('load:', config.dataset)
-
+      if (!this.datasets[cacheKey]) {
+        console.log('LOAD:', cacheKey)
         // fetchDataset() immediately returns a Promise<>, which we await on
         // so that multiple charts don't all try to fetch the dataset individually
-        this.datasets[config.dataset] = {
+        this.datasets[cacheKey] = {
           dataset: this._fetchDataset(config, options),
           activeFilters: {},
           filteredRows: null,
@@ -128,13 +138,26 @@ export default class DashboardDataManager {
         }
       }
 
+      // Firefox just silently dies if the text is too large. Set a timeout...
+      const withTimeout = (promise: Promise<any>, timeout: number) => {
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => {
+            reject(new Error(`Operation timed out after ${timeout}s`))
+          }, timeout * 1000)
+        })
+        return Promise.race([promise, timeoutPromise])
+      }
+
       // wait for dataset to load
-      // (this will immediately return dataset if it is already loaded)
-      let myDataset = await this.datasets[config.dataset].dataset
+      // this will immediately return dataset if it is already loaded
+      let myDataset = await withTimeout(this.datasets[cacheKey].dataset, 60)
+
+      let { _comments, ...allRows } = myDataset
+      let comments = _comments as unknown as string[]
 
       // make a copy because each viz in a dashboard might be hacking it differently
       // TODO: be more "functional" and return the object itself, and let views create copies if they need to
-      let allRows = { ...myDataset }
+      // let allRows = { ...myDataset }
 
       // remove ignored columns
       if (config.ignoreColumns) {
@@ -151,20 +174,67 @@ export default class DashboardDataManager {
         })
       }
 
-      return { allRows }
+      return { allRows, comments }
     } catch (e) {
-      // const message = '' + e
-      return { allRows: {} }
+      const msg = ('' + e).replaceAll('Error: ', '')
+      console.error(msg)
+      throw Error(msg)
+      // throw Error(`loading ${config.dataset}. Missing? CSV too large?`)
+      // return { allRows: {}, comments: [] }
     }
   }
 
   /**
+   * Convert row-wise columns into a DataTable. This is intended for
+   * columnar data formats such as avro networks
+   * @param fullpath full file path
+   * @param dataColumns map of column: data
+   * @param config data config object
+   */
+  public setRowWisePropertyTable(fullpath: string, dataTable: DataTable, config: any) {
+    const key = fullpath.substring(fullpath.lastIndexOf('/') + 1)
+
+    // merge key with keep/drop params (etc)
+    let fullConfig = { dataset: key }
+    if ('string' !== typeof config) fullConfig = Object.assign(fullConfig, config)
+
+    this.datasets[key] = {
+      activeFilters: {},
+      filteredRows: null,
+      filterListeners: new Set(),
+      dataset: new Promise<DataTable>(resolve => {
+        resolve(dataTable)
+      }),
+    }
+    // this is a promise:
+    return this.datasets[key].dataset
+  }
+
+  public getFeatureCollection(id: string): any[] {
+    return this.featureCollections[id]
+  }
+
+  public async registerFeatures(fullpath: string, features: any[], config: any) {
+    this.featureCollections[fullpath] = features
+
+    // set up feature-properties as dataset
+    const featureProperties = features.map((f: any) => f.properties || {})
+    await this.setFeatureProperties(fullpath, featureProperties, config)
+
+    // clear out memory, properties have been moved to column-data
+    features.forEach(feature => {
+      feature.properties = {}
+    })
+  }
+
+  /**
    * Convert features array from GeoJSONs and Shapefiles into DataTable
-   * @param filename
-   * @param featureProperties array of feature objects
+   * @param fullpath name of shape/geo file
+   * @param featureProperties array of feature PROPERTIES -- feature objects MAPPED to just be the props
    */
   public setFeatureProperties(fullpath: string, featureProperties: any[], config: any) {
-    const key = fullpath.substring(fullpath.lastIndexOf('/') + 1)
+    const namePart = fullpath.substring(fullpath.lastIndexOf('/') + 1)
+    const key = `${config?.subfolder || ''}/${namePart}`
 
     // merge key with keep/drop params (etc)
     let fullConfig = { dataset: key }
@@ -177,12 +247,15 @@ export default class DashboardDataManager {
       dataset: new Promise<DataTable>((resolve, reject) => {
         const thread = new DataFetcherWorker()
         // console.log('NEW WORKER', thread)
-        this.threads.push(thread)
 
         try {
-          thread.postMessage({ config: fullConfig, featureProperties })
-
           thread.onmessage = e => {
+            // wait for ready signal
+            if (e.data.ready) {
+              this.threads.push(thread)
+              thread.postMessage({ config: fullConfig, featureProperties })
+              return
+            }
             thread.terminate()
             if (e.data.error) {
               console.error(e.data.error)
@@ -225,12 +298,22 @@ export default class DashboardDataManager {
     filename: string,
     subfolder: string,
     vizDetails: any,
-    cbStatus?: any
+    cbStatus?: any,
+    extra?: boolean
   ) {
     const path = `/${subfolder}/${filename}`
+    const options = {} as any
+    if (vizDetails.projection) options.crs = vizDetails.projection
+
     // Get the dataset the first time it is requested
     if (!this.networks[path]) {
-      this.networks[path] = this._fetchNetwork({ subfolder, filename, vizDetails, cbStatus })
+      this.networks[path] = this._fetchNetwork({
+        subfolder,
+        filename,
+        cbStatus,
+        options,
+        extra,
+      })
     }
 
     // wait for the worker to provide the network
@@ -291,7 +374,7 @@ export default class DashboardDataManager {
   //   }
   // }
 
-  public setFilter(filter: FilterDefinition) {
+  public async setFilter(filter: FilterDefinition) {
     const { dataset, column, value, invert, range } = filter
 
     if (!this.datasets[dataset]) {
@@ -317,21 +400,26 @@ export default class DashboardDataManager {
     } else {
       allFilters[column] = { values, invert, range }
     }
-    this._updateFilters(dataset) // this is async
+    await this._updateFilters(dataset) // this is async
   }
 
-  public addFilterListener(config: { dataset: string }, listener: any) {
-    const selectedDataset = this.datasets[config.dataset]
-    if (!selectedDataset) throw Error('No dataset named: ' + config.dataset)
-
-    // console.log(22, config.dataset, this.datasets[config.dataset])
-    this.datasets[config.dataset].filterListeners.add(listener)
-  }
-
-  public removeFilterListener(config: { dataset: string }, listener: any) {
+  public addFilterListener(config: { dataset: string; subfolder: string }, listener: any) {
     try {
-      if (this.datasets[config.dataset].filterListeners) {
-        this.datasets[config.dataset].filterListeners.delete(listener)
+      const cacheKey = `${config.subfolder || this.subfolder}/${config.dataset}`
+      const selectedDataset = this.datasets[cacheKey]
+      if (!selectedDataset) throw Error(`Can't add listener, no dataset named: ` + cacheKey)
+
+      this.datasets[cacheKey].filterListeners.add(listener)
+    } catch (e) {
+      console.error('CANT ADD FILTER LISTENER' + e)
+    }
+  }
+
+  public removeFilterListener(config: { dataset: string; subfolder: string }, listener: any) {
+    const cacheKey = `${config.subfolder || this.subfolder}/${config.dataset}`
+    try {
+      if (this.datasets[cacheKey].filterListeners) {
+        this.datasets[cacheKey].filterListeners.delete(listener)
       }
     } catch (e) {
       // doesn't matter
@@ -364,8 +452,8 @@ export default class DashboardDataManager {
     let filteredRows: any[] = []
 
     const numberOfRowsInFullDataset = dataset[allColumns[0]].values.length
-    console.log('FILTERS:', metaData.activeFilters)
-    console.log('TOTLROWS', numberOfRowsInFullDataset)
+    // console.log('FILTERS:', metaData.activeFilters)
+    // console.log('TOTLROWS', numberOfRowsInFullDataset)
 
     // we will go thru each filter for this dataset and set the elements
     // to false whenever a row fails a filter.
@@ -476,33 +564,45 @@ export default class DashboardDataManager {
     }
   }
 
-  private async _fetchDataset(config: { dataset: string }, options?: { highPrecision: boolean }) {
-    if (!this.files.length) {
-      const { files } = await new HTTPFileSystem(this.fileApi).getDirectory(this.subfolder)
-      this.files = files
+  private async _fetchDataset(
+    config: { dataset: string },
+    options?: { highPrecision?: boolean; subfolder?: string }
+  ) {
+    let dirfiles
+    try {
+      // sometimes we are dealing with subfolder/subtabs, so always fetch file list anew.
+      const { files } = await new HTTPFileSystem(this.fileApi).getDirectory(
+        options?.subfolder || this.subfolder
+      )
+      dirfiles = files
+    } catch (e) {
+      console.error('FAIL! ' + e)
+      throw Error('' + e)
     }
+
+    let files = dirfiles
 
     return new Promise<DataTable>((resolve, reject) => {
       const thread = new DataFetcherWorker()
-      this.threads.push(thread)
-      // console.log('NEW WORKER', thread)
       try {
-        thread.postMessage({
-          fileSystemConfig: this.fileApi,
-          subfolder: this.subfolder,
-          files: this.files,
-          config: config,
-          options,
-        })
-
         thread.onmessage = e => {
+          // wait for ready signal and then begin work:
+          if (e.data.ready) {
+            // this.threads.push(thread)
+            thread.postMessage({
+              fileSystemConfig: this.fileApi,
+              subfolder: options?.subfolder || this.subfolder,
+              files,
+              config: config,
+              options,
+            })
+            return
+          }
           thread.terminate()
           if (e.data.error) {
-            let msg = '' + e.data.error
+            let msg = '' + (e.data?.error || 'Error loading file')
             msg = msg.replace('[object Response]', 'Error loading file')
-
             if (config?.dataset && msg.indexOf(config.dataset) === -1) msg += `: ${config.dataset}`
-
             reject(msg)
           }
           resolve(e.data)
@@ -515,15 +615,94 @@ export default class DashboardDataManager {
     })
   }
 
+  private async _getAvroNetwork(props: {
+    subfolder: string
+    filename: string
+    options?: any
+    cbStatus?: any
+  }): Promise<NetworkLinks | null> {
+    try {
+      const httpFileSystem = new HTTPFileSystem(this.fileApi)
+      const blob = await httpFileSystem.getFileBlob(`${props.subfolder}/${props.filename}`)
+
+      const records: any[] = await new Promise(async (resolve, reject) => {
+        const rows = [] as any[]
+
+        avro
+          .createBlobDecoder(blob)
+          .on('metadata', (schema: any) => {})
+          .on('data', (row: any) => {
+            rows.push(row)
+          })
+          .on('end', () => {
+            resolve(rows)
+          })
+      })
+
+      const network = records[0]
+
+      const numLinks = network.linkId.length
+      const source: Float32Array = new Float32Array(2 * numLinks)
+      const dest: Float32Array = new Float32Array(2 * numLinks)
+
+      for (let i = 0; i < numLinks; i++) {
+        const fromOffset = 2 * network.from[i]
+        const toOffset = 2 * network.to[i]
+        source[2 * i] = network.nodeCoordinates[fromOffset]
+        source[2 * i + 1] = network.nodeCoordinates[1 + fromOffset]
+        dest[2 * i] = network.nodeCoordinates[toOffset]
+        dest[2 * i + 1] = network.nodeCoordinates[1 + toOffset]
+      }
+
+      network.source = source
+      network.dest = dest
+
+      return network
+    } catch (e) {
+      console.error(e)
+      return null
+    }
+  }
+
+  private async _getEPSGfromConfig() {
+    try {
+      const fApi = new HTTPFileSystem(this.fileApi)
+      const { files } = await fApi.getDirectory(this.subfolder)
+      const outputConfigs = files.filter(
+        f => f.indexOf('config.xml') > -1 || f.indexOf('config_reduced.xml') > -1
+      )
+      if (outputConfigs.length) {
+        for (const xmlConfigFileName of outputConfigs) {
+          try {
+            const raw = await fApi.getFileBlob(`${this.subfolder}/${xmlConfigFileName}`)
+            const buffer = await raw.arrayBuffer()
+            const bytes = await gUnzip(buffer)
+            const text = new TextDecoder().decode(bytes)
+            const configXML = (await parseXML(text)) as any
+            const global = configXML.config.module.filter((f: any) => f.$name === 'global')[0]
+            const crs = global.param.filter((p: any) => p.$name === 'coordinateSystem')[0]
+            const crsValue = crs.$value
+            return crsValue
+          } catch (e) {
+            console.warn('Failed parsing', xmlConfigFileName)
+          }
+        }
+      }
+    } catch (e) {
+      console.error('' + e)
+      return ''
+    }
+  }
+
   private async _fetchNetwork(props: {
     subfolder: string
     filename: string
-    vizDetails: any
     cbStatus?: any
+    extra?: boolean
+    options: { crs?: string }
   }) {
     return new Promise<NetworkLinks>(async (resolve, reject) => {
-      const { subfolder, filename, vizDetails, cbStatus } = props
-
+      const { subfolder, filename, cbStatus, options } = props
       const path = `/${subfolder}/${filename}`
       console.log('load network:', path)
 
@@ -542,6 +721,72 @@ export default class DashboardDataManager {
         reject('Error reading folder: ' + folder)
       }
 
+      // AVRO NETWORK
+      if (filename.toLocaleLowerCase().endsWith('.avro')) {
+        const result = (await this._getAvroNetwork(props)) as any
+        if (!result) reject('Problem loading network: ' + path)
+        resolve(result)
+        return
+      }
+
+      // ------ side quest: get EPSG from output_config
+      const configEPSG = await this._getEPSGfromConfig()
+      // WASM XML -----------
+      if (
+        filename.toLocaleLowerCase().endsWith('.xml') ||
+        filename.toLocaleLowerCase().endsWith('.xml.gz')
+      ) {
+        try {
+          const promise: Promise<any> = new Promise<any>((resolve, reject) => {
+            const wasmWorker = new WasmXmlNetworkParser() // as unknown as any
+            wasmWorker.onmessage = (event: any) => {
+              const data = event.data
+              if ('requestCRS' in data) {
+                // No CRS in network. But if we have a CRS in output_config, use that!
+                if (configEPSG && configEPSG !== 'Atlantis') {
+                  data.confirmedCRS = configEPSG
+                  wasmWorker.postMessage({ confirmedCRS: configEPSG })
+                  return
+                }
+                // We need to ask the user.
+                const msg = data.requestCRS ? '"Atlantis" coordinates found. ' : ''
+                let crs =
+                  prompt(
+                    `Enter EPSG projection code.\n\n${msg}Enter projection, e.g. EPSG:25832, or cancel to load without a base map.`
+                  ) || 'Atlantis'
+                if (Number.isInteger(parseInt(crs))) crs = `EPSG:${crs}`
+                wasmWorker.postMessage({ confirmedCRS: crs })
+                return
+              }
+              if (data.error) {
+                wasmWorker.terminate()
+                reject(data.error)
+              }
+              if (data.status && cbStatus) {
+                cbStatus(data.status)
+                return
+              }
+              wasmWorker.terminate()
+              resolve(data.network)
+            }
+            wasmWorker.postMessage({
+              path,
+              crs: options.crs || '',
+              fsConfig: this.fileApi,
+              options,
+            })
+          })
+          const network = await promise
+          resolve(network)
+        } catch (e) {
+          console.error(e)
+          reject(e)
+        } finally {
+          return
+        }
+      }
+
+      // OTHER: GEOJSON, SHAPEFILE, ...
       const thread = new RoadNetworkLoader() as any
       try {
         thread.onmessage = (e: MessageEvent) => {
@@ -577,7 +822,8 @@ export default class DashboardDataManager {
         thread.postMessage({
           filePath: path,
           fileSystem: this.fileApi,
-          vizDetails,
+          options,
+          extraColumns: !!props.extra, // include freespeed, length (off by default!)
           isFirefox, // we need this for now, because Firefox bug #260
         })
       } catch (err) {

@@ -11,7 +11,19 @@
 
     <link rel="icon" href="/images/SW_favicon.png" />
 
-    <link href="/css/font-awesome-5.7.1.css" rel="stylesheet" />
+    <!-- load some stylesheets lazily -->
+    <link
+      rel="stylesheet"
+      href="/css/font-awesome-5.7.1.css"
+      media="print"
+      onload="this.media='all'"
+    />
+    <link
+      rel="stylesheet"
+      href="/css/materialdesignicons.css"
+      media="print"
+      onload="this.media='all'"
+    />
     <link href="/images/SW_favicon.png" rel="icon" type="image/png" />
 
     <!-- descriptive things -->
@@ -21,17 +33,9 @@
     <meta content="From the VSP team at TU-Berlin" name="twitter:description" />
     <meta content="From the VSP team at TU-Berlin" name="og:description" />
     <meta content="https://vsp.berlin/simwrapper" name="og:url" />
-    <!-- <meta
-      content="https://github.com/matsim-vsp/covid-sim/raw/master/src/assets/images/v1-thumb.png"
-      name="og:image"
-    /> -->
     <meta content="summary_large_image" name="twitter:card" />
     <meta content="@billyinberlin" name="twitter:site" />
     <meta content="@billyinberlin" name="twitter:creator" />
-    <!-- <meta
-      content="https://github.com/matsim-vsp/covid-sim/raw/master/src/assets/images/v1-thumb.png"
-      name="twitter:image"
-    /> -->
 
     <!-- github pages hack: allows single-page-app to handle arbitrary URLs -->
     <script>
@@ -58,15 +62,17 @@
       })()
     </script>
 
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <!-- <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,700;1,400;1,700&family=Libre+Franklin:ital,wght@0,300;0,700;1,400;1,700&family=Roboto+Slab:ital,wght@0,400;0,700;1,300&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300;0,700;1,400;1,700&family=Libre+Franklin:ital,wght@0,300;0,700;1,400;1,700&family=Roboto+Slab:ital,wght@0,400;0,700;1,300&display=swap"
       rel="stylesheet"
     />
+     -->
   </head>
   <body>
     <div id="app"></div>
+    <script type="module" src="/src/js/avro-browserify.js"></script>
     <script type="module" src="/src/main.ts"></script>
     <noscript>
       <strong>

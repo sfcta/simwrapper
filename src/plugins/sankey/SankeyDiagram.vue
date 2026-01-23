@@ -1,16 +1,12 @@
 <template lang="pug">
-.sankey-container(:class="{'is-thumbnail': thumbnail}")
-
-  //- .labels(v-if="!thumbnail")
-  //-   h3.center {{ vizDetails.title }}
-  //-   h5.center {{ vizDetails.description }}
+.sankey-container(:class="{'is-thumbnail': thumbnail, 'is-large': textSize==2, 'is-medium': textSize==1}")
 
   svg.chart-area(:id="cleanConfigId" :class="{'is-thumbnail': thumbnail}")
 
   .labels(v-if="!thumbnail")
     p.center: b {{ totalTrips.toLocaleString() }} {{ $t('total') }}
 
-  b-switch.switcher(v-if="!thumbnail" v-model="onlyShowChanges") {{ $t('showChanges')}}
+  b-switch.switcher(v-if="!thumbnail" v-model="onlyShowChanges" size="is-small") {{ $t('showChanges')}}
 
 </template>
 
@@ -27,7 +23,7 @@ import { defineComponent } from 'vue'
 import yaml from 'yaml'
 import { sankey, sankeyDiagram } from '@simwrapper/d3-sankey-diagram'
 import { select } from 'd3-selection'
-import { scaleOrdinal } from 'd3-scale'
+
 import {
   interpolateRainbow as interpolator,
   schemeCategory10 as colorScheme,
@@ -39,8 +35,15 @@ import globalStore from '@/store'
 import { FileSystemConfig, VisualizationPlugin } from '@/Globals'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
 
+enum Size {
+  small,
+  med,
+  large,
+}
+
 interface SankeyYaml {
-  csv: string
+  csv?: string
+  dataset?: string
   title?: string
   description?: string
 }
@@ -59,7 +62,7 @@ const MyComponent = defineComponent({
   data() {
     return {
       globalState: globalStore.state,
-      vizDetails: { csv: '', title: '', description: '' } as SankeyYaml,
+      vizDetails: { csv: '', dataset: '', title: '', description: '' } as SankeyYaml,
       loadingText: '',
       jsonChart: {} as any,
       totalTrips: 0,
@@ -67,6 +70,8 @@ const MyComponent = defineComponent({
       onlyShowChanges: false,
       csvData: [] as any[],
       colorRamp: [] as string[],
+      textSize: Size.small,
+      resizeObserver: null as null | ResizeObserver,
     }
   },
 
@@ -108,6 +113,14 @@ const MyComponent = defineComponent({
 
   methods: {
     changeDimensions() {
+      // set font size based on width
+      const panel = document.querySelector(`#${this.cleanConfigId}`)
+      if (panel) {
+        this.textSize =
+          panel.clientWidth > 900 ? Size.large : panel.clientWidth > 600 ? Size.med : Size.small
+        // panel.clientWidth > 900 ? Size.small : panel.clientWidth > 600 ? Size.small : Size.small
+      }
+      // redraw
       if (this.jsonChart?.nodes) this.doD3()
     },
 
@@ -124,32 +137,44 @@ const MyComponent = defineComponent({
 
       const text = await this.fileApi.getFileText(filename)
       this.vizDetails = yaml.parse(text)
-
       this.$emit('title', this.vizDetails.title)
     },
 
     async loadFiles(): Promise<any[]> {
-      this.loadingText = 'Loading files...'
-      try {
-        const rawText = await this.fileApi.getFileText(this.subfolder + '/' + this.vizDetails.csv)
+      const filename = this.vizDetails.csv || this.vizDetails.dataset
+      if (!filename) {
+        this.$emit('error', 'YAML must specify csv "dataset" filename')
+        return []
+      }
 
+      this.loadingText = 'Loading files...'
+      let rawText
+      try {
+        rawText = await this.fileApi.getFileText(this.subfolder + '/' + filename)
+      } catch (e) {
+        this.$emit('error', 'File not found: ' + this.subfolder + '/' + filename)
+        return []
+      }
+
+      try {
         const content = Papa.parse(rawText, {
           // using header:false because we don't care what
           // the column names are: we expect "from,to,value" in cols 0,1,2.
           header: false,
           dynamicTyping: true,
           skipEmptyLines: true,
+          delimitersToGuess: ['\t', ';', ',', ' '],
+          comments: '#',
         })
         return content.data
       } catch (err) {
         const e = err as any
         console.error({ e })
         this.loadingText = '' + e
-
-        // maybe it failed because password?
-        if (this.fileSystem && this.fileSystem.needPassword && e.status === 401) {
-          globalStore.commit('requestLogin', this.fileSystem.slug)
-        }
+        this.$emit(
+          'error',
+          'File loaded but could not parse: ' + this.subfolder + '/' + this.vizDetails.csv
+        )
       }
       return []
     },
@@ -238,7 +263,12 @@ const MyComponent = defineComponent({
       const context = canvas.getContext('2d')
       if (!context) return 120
 
-      context.font = '16px Arial'
+      context.font =
+        this.textSize == Size.large
+          ? 'bold 33px Arial'
+          : this.textSize == Size.med
+          ? '24px Arial'
+          : '16px Arial'
 
       let max = 0
 
@@ -261,7 +291,7 @@ const MyComponent = defineComponent({
       let width = box ? box.clientWidth : 100
       let height = box ? box.clientHeight : 100
 
-      let labelWidth = 5 + this.getMaxLabelWidth() // this.thumbnail ? 60 : 125
+      let labelWidth = 10 + this.getMaxLabelWidth() // this.thumbnail ? 60 : 125
 
       const layout = sankey()
         .nodeWidth(8)
@@ -281,18 +311,27 @@ const MyComponent = defineComponent({
     },
   },
 
-  async mounted() {
-    await this.getVizDetails()
-    this.csvData = await this.loadFiles()
-    this.jsonChart = this.processInputs()
-
-    window.addEventListener('resize', this.changeDimensions)
-
-    this.doD3()
+  beforeDestroy() {
+    if (this.resizeObserver) this.resizeObserver.disconnect()
   },
 
-  beforeDestroy() {
-    window.removeEventListener('resize', this.changeDimensions)
+  async mounted() {
+    try {
+      await this.getVizDetails()
+      this.csvData = await this.loadFiles()
+      this.jsonChart = this.processInputs()
+    } catch (e) {
+      this.$emit('error', '' + e)
+    }
+
+    // resizer for bigger fonts
+    this.resizeObserver = new ResizeObserver(() => {
+      this.changeDimensions()
+    })
+    const targetDiv = document.querySelector(`#${this.cleanConfigId}`)
+    if (targetDiv) this.resizeObserver.observe(targetDiv)
+
+    this.doD3()
   },
 })
 
@@ -303,14 +342,26 @@ export default MyComponent
 @import '@/styles.scss';
 
 .sankey-container {
-  padding-top: 1rem;
+  // padding-top: 1rem;
   display: flex;
   flex-direction: column;
+  background-color: var(--bgCardFrame);
+  font-size: 16px;
+  font-weight: normal;
 }
 
 .sankey-container.is-thumbnail {
   padding-top: 0;
   height: $thumbnailHeight;
+}
+
+.sankey-container.is-medium {
+  font-size: 24px;
+}
+
+.sankey-container.is-large {
+  font-size: 32px;
+  font-weight: bold;
 }
 
 h1 {
@@ -386,7 +437,7 @@ p {
 
 .chart-area {
   height: 100%;
-  width: 100%;
+  width: 95%;
   flex: 1;
   margin: 0 auto;
 }

@@ -2,23 +2,27 @@
 .gl-app(:class="{'hide-thumbnail': !thumbnail}"
         :style='{"background": urlThumbnail}' oncontextmenu="return false")
 
-  trip-viz.anim(v-if="!thumbnail"
-                :center = "vizDetails.center"
+  deck-map.anim(v-if="!thumbnail && isLoaded"
                 :colors = "COLOR_OCCUPANCY"
-                :drtRequests = "$options.drtRequests"
+                :drtRequests = "$options.drtRequests || []"
                 :dark = "globalState.isDarkMode"
-                :paths = "$options.paths"
+                :leftside = "vizDetails.leftside || false"
+                :mapIsIndependent="false"
+                :paths = "$options.paths || []"
                 :settingsShowLayers = "SETTINGS"
                 :searchEnabled = "searchEnabled"
                 :simulationTime = "simulationTime"
-                :traces = "$options.traces"
+                :traces = "$options.traces || []"
                 :vehicleLookup = "vehicleLookup"
                 :viewId = "viewId"
-                :onClick = "handleClick")
+                :onClick = "handleClick"
+                :bgLayers="backgroundLayers"
+  )
 
-  zoom-buttons(v-if="!thumbnail")
+  h3.loadmsg(v-if="!isLoaded") {{ myState.statusMessage }}
 
-  //- isLoaded && !thumbnail")
+  zoom-buttons(v-if="!thumbnail" corner="top-left")
+
   .right-side(v-if="isLoaded && !thumbnail")
     collapsible-panel(direction="right")
       .big.clock
@@ -51,14 +55,15 @@
             :max="speedStops[speedStops.length-1]"
             :duration="0"
             :dotSize="20"
-            :tooltip="true"
+            :tooltip="false"
             tooltip-placement="bottom"
             :tooltip-formatter="val => val + 'x'"
           )
             template(v-for="val in speedStops")
               b-slider-tick(:value="val" :key="val")
 
-  playback-controls.bottom-area(v-if="!thumbnail && isLoaded"
+  playback-controls.bottom-area(v-if="isLoaded && !thumbnail"
+      data-testid="playback-controls"
       @click='toggleSimulation'
       @time='setTime'
       :timeStart = "timeStart"
@@ -99,15 +104,17 @@ import { ToggleButton } from 'vue-js-toggle-button'
 import readBlob from 'read-blob'
 import YAML from 'yaml'
 import crossfilter from 'crossfilter2'
-import { blobToArrayBuffer, blobToBinaryString } from 'blob-util'
 
 import globalStore from '@/store'
 import CollapsiblePanel from '@/components/CollapsiblePanel.vue'
-import LegendColors from './LegendColors'
+import LegendColors from './LegendColors.vue'
 import PlaybackControls from '@/components/PlaybackControls.vue'
 import SettingsPanel from './SettingsPanel.vue'
 import ZoomButtons from '@/components/ZoomButtons.vue'
 import { arrayBufferToBase64, gUnzip } from '@/js/util'
+import DeckMap from './DeckMapComponent.vue'
+import HTTPFileSystem from '@/js/HTTPFileSystem'
+import BackgroundLayers from '@/js/BackgroundLayers'
 
 import {
   ColorScheme,
@@ -118,21 +125,17 @@ import {
   VisualizationPlugin,
   LIGHT_MODE,
   DARK_MODE,
-  REACT_VIEW_HANDLES,
 } from '@/Globals'
-
-import TripViz from './TripViz'
-import HTTPFileSystem from '@/js/HTTPFileSystem'
 
 const MyComponent = defineComponent({
   name: 'VehicleAnimationPlugin',
   i18n,
   components: {
     CollapsiblePanel,
-    SettingsPanel,
+    DeckMap,
     LegendColors,
-    TripViz,
     PlaybackControls,
+    SettingsPanel,
     ToggleButton,
     ZoomButtons,
   },
@@ -143,27 +146,25 @@ const MyComponent = defineComponent({
     yamlConfig: String,
     thumbnail: Boolean,
   },
-  data: () => {
-    // const COLOR_OCCUPANCY = {
-    //   Car: [85, 255, 85],
-    //   HCV: [240, 110, 30],
-    // } as any
+  data() {
     const COLOR_OCCUPANCY = {
       0: [140, 140, 160],
-      1: [85, 255, 85],
-      2: [255, 255, 85],
+      1: [65, 220, 65],
+      2: [255, 225, 45],
       3: [240, 110, 30],
       4: [192, 30, 50],
     } as any
 
     const SETTINGS = {
       vehicles: true,
-      routes: true,
+      routes: false,
       requests: false,
     } as any
 
     return {
       viewId: Math.floor(1e12 * Math.random()),
+      isLoaded: false,
+
       COLOR_OCCUPANCY,
       SETTINGS,
       legendItems: Object.keys(COLOR_OCCUPANCY).map(key => {
@@ -177,6 +178,8 @@ const MyComponent = defineComponent({
 
       legendRequests: [{ type: LegendItemType.line, color: [255, 0, 255], value: 0, label: '' }],
 
+      backgroundLayers: null as null | BackgroundLayers,
+
       vizDetails: {
         network: '',
         drtTrips: '',
@@ -188,6 +191,7 @@ const MyComponent = defineComponent({
         zoom: 10,
         mapIsIndependent: false,
         theme: '',
+        leftside: false,
       },
 
       myState: {
@@ -229,11 +233,10 @@ const MyComponent = defineComponent({
 
       globalState: globalStore.state,
       isDarkMode: globalStore.state.isDarkMode,
-      isLoaded: true,
       showHelp: false,
 
       speedStops: [-20, -10, -5, -2, -1, -0.5, -0.25, 0, 0.25, 0.5, 1, 2, 5, 10, 20],
-      speed: 10,
+      speed: 1,
 
       legendBits: [] as any[],
       isEmbedded: false,
@@ -278,13 +281,6 @@ const MyComponent = defineComponent({
     },
   },
   watch: {
-    '$store.state.viewState'() {
-      if (this.vizDetails.mapIsIndependent) return
-
-      if (!REACT_VIEW_HANDLES[this.viewId]) return
-      REACT_VIEW_HANDLES[this.viewId]()
-    },
-
     async 'globalState.authAttempts'() {
       console.log('AUTH CHANGED - Reload')
       if (!this.yamlConfig) this.buildRouteFromUrl()
@@ -362,6 +358,8 @@ const MyComponent = defineComponent({
           // maybe it failed because password?
           if (this.fileSystem.needPassword && e.status === 401) {
             globalStore.commit('requestLogin', this.fileSystem.slug)
+          } else {
+            this.$emit('error', '' + e)
           }
         }
       }
@@ -369,13 +367,28 @@ const MyComponent = defineComponent({
       // initial view
       if (this.vizDetails.theme) this.$store.commit('setTheme', this.vizDetails.theme)
 
-      if (this.vizDetails.center) {
+      // left side driving?
+      // @ts-ignore
+      if (this.vizDetails.leftside || this.vizDetails.leftSide) this.vizDetails.leftside = true
+
+      // center point
+      let center = this.vizDetails.center as any
+      if (center) {
+        try {
+          if ('string' == typeof center) center = center.split(',').map(Number)
+          this.vizDetails.center = center
+        } catch (e) {
+          this.$emit('error', 'center must be "long,lat"')
+          center = [13.45, 52.5]
+          this.vizDetails.zoom = 3
+        }
+
         this.$store.commit('setMapCamera', {
-          longitude: this.vizDetails.center[0],
-          latitude: this.vizDetails.center[1],
-          zoom: this.vizDetails.zoom || 10,
-          pitch: 20,
+          center,
+          zoom: this.vizDetails.zoom || 9,
+          pitch: 0,
           bearing: 0,
+          jump: true,
         })
       }
 
@@ -383,7 +396,7 @@ const MyComponent = defineComponent({
       const t = this.vizDetails.title ? this.vizDetails.title : 'Agent Animation'
       this.$emit('title', t)
 
-      this.buildThumbnail()
+      await this.buildThumbnail()
     },
 
     async buildThumbnail() {
@@ -487,14 +500,19 @@ const MyComponent = defineComponent({
       return crossfilter(requests)
     },
 
-    async parseVehicles(trips: any[]) {
+    parseVehicles(trips: any[]) {
       const allTrips: any[] = []
       let vehNumber = -1
+
+      let center = [0, 0]
 
       for (const trip of trips) {
         const path = trip.path
         const timestamps = trip.timestamps
         const passengers = trip.passengers
+
+        center[0] += path[0][0]
+        center[1] += path[0][1]
 
         // attach vehicle ID to each segment so we can click
         vehNumber++
@@ -515,6 +533,19 @@ const MyComponent = defineComponent({
 
           allTrips.push(trip)
         }
+      }
+
+      if (!this.vizDetails.center) {
+        center[0] /= trips.length
+        center[1] /= trips.length
+        this.vizDetails.center = center
+        globalStore.commit('setMapCamera', {
+          center,
+          zoom: 9,
+          pitch: 0,
+          bearing: 0,
+          jump: true,
+        })
       }
       return crossfilter(allTrips)
     },
@@ -658,7 +689,7 @@ const MyComponent = defineComponent({
           )
           const buffer = await blob.arrayBuffer()
           // recursively gunzip until it can gunzip no more:
-          const unzipped = gUnzip(buffer)
+          const unzipped = await gUnzip(buffer)
           const text = new TextDecoder('utf-8').decode(unzipped)
           const json = JSON.parse(text)
           trips = json.trips
@@ -669,10 +700,6 @@ const MyComponent = defineComponent({
         this.myState.statusMessage = '' + e
       }
       return { trips, drtRequests }
-    },
-
-    toggleLoaded(loaded: boolean) {
-      this.isLoaded = loaded
     },
 
     rotateColors() {
@@ -703,13 +730,13 @@ const MyComponent = defineComponent({
 
     this.setWallClock()
 
-    this.myState.statusMessage = '/ Dateien laden...'
+    this.myState.statusMessage = 'Loading...'
     console.log('loading files')
     const { trips, drtRequests } = await this.loadFiles()
 
     console.log('parsing vehicle motion')
     this.myState.statusMessage = `${this.$t('vehicles')}...`
-    this.paths = await this.parseVehicles(trips)
+    this.paths = this.parseVehicles(trips)
     this.pathStart = this.paths.dimension(d => d.t0)
     this.pathEnd = this.paths.dimension(d => d.t1)
     this.pathVehicle = this.paths.dimension(d => d.v)
@@ -729,9 +756,23 @@ const MyComponent = defineComponent({
     this.requestVehicle = this.requests.dimension(d => d[5])
 
     console.log('GO!')
+    this.isLoaded = true
+
     this.myState.statusMessage = ''
 
     document.addEventListener('visibilitychange', this.handleVisibilityChange, false)
+
+    // background layers
+    try {
+      this.backgroundLayers = new BackgroundLayers({
+        vizDetails: this.vizDetails,
+        fileApi: this.fileApi,
+        subfolder: this.subfolder,
+      })
+      await this.backgroundLayers.initialLoad()
+    } catch (e) {
+      this.$emit('error', 'Error loading background layers')
+    }
 
     this.myState.isRunning = true
     this.timeElapsedSinceLastFrame = Date.now()
@@ -895,6 +936,17 @@ input {
   border: none;
   background-color: var(--bgCream);
   color: #ccc;
+}
+
+.loadmsg {
+  background-color: var(--bgBold);
+  padding: 2rem 2rem;
+  color: var(--link);
+  z-index: 10;
+  text-align: center;
+  position: absolute;
+  top: 4px;
+  left: 4px;
 }
 
 .left-side {

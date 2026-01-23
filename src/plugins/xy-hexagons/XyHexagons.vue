@@ -1,8 +1,7 @@
 <template lang="pug">
-.xy-hexagons(:class="{'hide-thumbnail': !thumbnail}" oncontextmenu="return false" :id="`id-${id}`")
+.xy-hexagons(oncontextmenu="return false" :id="`id-${id}`")
 
-  xy-hex-deck-map.hex-layer(
-    v-if="!thumbnail && isLoaded"
+  xy-hex-deck-map.hex-layer(v-if="isLoaded"
     v-bind="mapProps"
   )
 
@@ -16,9 +15,9 @@
         h3(style="margin-top: -1rem;") {{ $t('areas') }}: {{ hexStats.numHexagons }}, {{ $t('count') }}: {{ hexStats.rows }}
         button.button(style="color: #c0f; border-color: #c0f" @click="handleShowSelectionButton") {{ $t('showDetails') }}
 
-  .control-panel(v-if="isLoaded && !thumbnail && !myState.statusMessage")
-        //- :class="{'is-dashboard': config !== undefined }"
-
+  .control-panel(v-if="isLoaded && !thumbnail && !myState.statusMessage"
+    data-testid="xy-hexagons-control-panel"
+  )
         .panel-item(v-for="group in Object.keys(aggregations)" :key="group")
           p.ui-label {{ group }}
           button.button.is-small.aggregation-button(
@@ -83,7 +82,6 @@ import YAML from 'yaml'
 
 import util from '@/js/util'
 import globalStore from '@/store'
-import { REACT_VIEW_HANDLES } from '@/Globals'
 
 import HTTPFileSystem from '@/js/HTTPFileSystem'
 
@@ -91,7 +89,10 @@ import CSVParserWorker from './CsvGzipParser.worker.ts?worker'
 import CollapsiblePanel from '@/components/CollapsiblePanel.vue'
 import DrawingTool from '@/components/DrawingTool/DrawingTool.vue'
 import ZoomButtons from '@/components/ZoomButtons.vue'
-import XyHexDeckMap from './XyHexLayer'
+// import XyHexDeckMap from './XyHexLayer'
+import XyHexDeckMap from './XyHexMapComponent.vue'
+import NewXmlFetcher from '@/workers/NewXmlFetcher.worker?worker'
+import BackgroundLayers from '@/js/BackgroundLayers'
 
 import {
   ColorScheme,
@@ -102,6 +103,7 @@ import {
   VisualizationPlugin,
   Status,
 } from '@/Globals'
+import { NewRowCache } from './CsvGzipParser.worker'
 
 interface Aggregations {
   [heading: string]: {
@@ -144,9 +146,13 @@ const MyComponent = defineComponent({
     thumbnail: Boolean,
   },
   data: () => {
-    const colorRamps = ['bathymetry', 'par', 'chlorophyll', 'magma']
+    const colorRamps = ['par', 'bathymetry', 'magma', 'chlorophyll']
     return {
-      id: `id-${Math.floor(1e12 * Math.random())}` as any,
+      id: Math.floor(1e12 * Math.random()),
+      resolvers: {} as { [id: number]: any },
+      resolverId: 0,
+      _xmlConfigFetcher: {} as any,
+
       standaloneYAMLconfig: {
         title: '',
         description: '',
@@ -162,12 +168,16 @@ const MyComponent = defineComponent({
       },
       YAMLrequirementsXY: { file: '', aggregations: {} },
       colorRamps,
-      buttonColors: ['#5E8AAE', '#BF7230', '#269367', '#9C439C'],
+      buttonColors: ['#BF7230', '#5E8AAE', '#9C439C', '#269367'],
       aggregations: {} as Aggregations,
-      columnLookup: [] as number[],
+      aggNumber: 0,
       gzipWorker: null as Worker | null,
       colorRamp: colorRamps[0],
       globalState: globalStore.state,
+      currentGroup: '',
+
+      backgroundLayers: null as null | BackgroundLayers,
+
       vizDetails: {
         title: '',
         description: '',
@@ -186,10 +196,7 @@ const MyComponent = defineComponent({
         yamlConfig: '',
         thumbnail: false,
       },
-      rowCache: {} as {
-        [id: string]: { raw: Float32Array; length: number; coordColumns: number[] }
-      },
-      requests: { raw: new Float32Array(0), length: 0 } as { raw: Float32Array; length: number },
+      requests: {} as NewRowCache,
       highlightedTrips: [] as any[],
       searchTerm: '',
       searchEnabled: false,
@@ -236,18 +243,21 @@ const MyComponent = defineComponent({
     mapProps(): any {
       return {
         viewId: this.id,
+        group: this.currentGroup,
+        agg: this.aggNumber,
         colorRamp: this.colorRamp,
-        coverage: 0.65,
+        coverage: 0.7,
         dark: this.$store.state.isDarkMode,
         data: this.requests,
         extrude: this.extrudeTowers,
         highlights: this.highlightedTrips,
-        mapIsIndependent: this.vizDetails.mapIsIndependent,
+        mapIsIndependent: this.vizDetails.mapIsIndependent || false,
         maxHeight: this.vizDetails.maxHeight,
         metric: this.buttonLabel,
         radius: this.vizDetails.radius,
         selectedHexStats: this.hexStats,
         upperPercentile: 100,
+        bgLayers: this.backgroundLayers,
         onClick: this.handleClick,
       }
     },
@@ -274,14 +284,9 @@ const MyComponent = defineComponent({
         )
       }
     },
-    '$store.state.viewState'() {
-      if (this.vizDetails.mapIsIndependent) return
-      if (REACT_VIEW_HANDLES[this.id]) REACT_VIEW_HANDLES[this.id]()
-    },
   },
   methods: {
     handleClick(target: any, event: any) {
-      console.log({ target, event })
       if (!target.layer) this.handleEmptyClick()
       else this.handleHexClick(target, event)
     },
@@ -290,21 +295,21 @@ const MyComponent = defineComponent({
       this.flipViewToShowInvertedData({})
     },
 
-    handleHexClick(pickedObject: any, event: any) {
+    handleHexClick(target: any, event: any) {
       if (!event.srcEvent.shiftKey) {
         this.multiSelectedHexagons = {}
         this.hexStats = null
-        this.flipViewToShowInvertedData(pickedObject)
+        this.flipViewToShowInvertedData(target)
         return
       }
 
       // SHIFT!!
-      const index = pickedObject?.object?.index
+      const index = target?.object?.index
       if (index !== undefined) {
         if (index in this.multiSelectedHexagons) {
           delete this.multiSelectedHexagons[index]
         } else {
-          this.multiSelectedHexagons[index] = pickedObject.object.points
+          this.multiSelectedHexagons[index] = target.object.points
         }
         this.hexStats = this.selectedHexagonStatistics()
       }
@@ -314,100 +319,57 @@ const MyComponent = defineComponent({
       if (this.isHighlightingZone) {
         // force highlight off if user clicked on a second hex
         this.isHighlightingZone = false
-      } else if (!pickedObject.object) {
-        // force highlight off if user clicked away
-        this.isHighlightingZone = false
       } else {
-        this.isHighlightingZone = true
+        // force highlight off if user clicked away
+        this.isHighlightingZone = !!pickedObject.object
       }
 
       const parts = this.activeAggregation.split('~') // an unlikely unicode
 
-      let suffix = 0
-      let revSuffix = 0
-
-      // set up the hexagons
       if (!this.isHighlightingZone) {
-        // reset the view
+        // reset the view to normal
         this.hexStats = null
         this.multiSelectedHexagons = {}
         this.handleOrigDest(parts[0], parseInt(parts[1]))
-      } else {
-        // select the anti-view
-        suffix = parseInt(parts[1])
-        revSuffix = suffix % 2 ? suffix - 1 : suffix + 1
-
-        const origKey = `${parts[0]}${suffix}`
-        const origArray = this.rowCache[origKey]
-
-        const key = `${parts[0]}${revSuffix}`
-        const inverseArray = this.rowCache[key]
-
-        const arcFilteredRows: any = []
-
-        for (const row of pickedObject.object.points) {
-          const zoffset = row.index * 2
-          const coords = [inverseArray.raw[zoffset], inverseArray.raw[zoffset + 1]]
-
-          arcFilteredRows.push([
-            // from
-            [origArray.raw[zoffset], origArray.raw[zoffset + 1]],
-            // to
-            coords,
-          ])
-          this.highlightedTrips = arcFilteredRows
-        }
-
-        if (this.hexStats) this.hexStats.selectedHexagonIds = []
-        this.multiSelectedHexagons = {}
-
-        this.colorRamp = this.colorRamps[revSuffix]
-      }
-
-      // set up the connecting arc-lines
-      if (!this.isHighlightingZone) {
         this.highlightedTrips = []
-      } else {
-        // this.highlightedTrips = arcFilteredRows
+        return
       }
+
+      // select the anti-view
+      let revAgg = this.aggNumber + (this.aggNumber % 2 ? -1 : 1) // this.aggNumber - 1 : this.aggNumber + 1
+      const arcFilteredRows: any = []
+
+      for (const index of pickedObject.object.pointIndices) {
+        const zoffset = index * 2
+
+        const from = [
+          this.requests[this.currentGroup].positions[revAgg][zoffset],
+          this.requests[this.currentGroup].positions[revAgg][zoffset + 1],
+        ]
+        const to = [
+          this.requests[this.currentGroup].positions[this.aggNumber][zoffset],
+          this.requests[this.currentGroup].positions[this.aggNumber][zoffset + 1],
+        ]
+
+        arcFilteredRows.push([from, to])
+        this.highlightedTrips = arcFilteredRows
+      }
+
+      if (this.hexStats) this.hexStats.selectedHexagonIds = []
+      this.multiSelectedHexagons = {}
+      this.colorRamp = this.colorRamps[revAgg]
     },
 
-    async handleOrigDest(groupName: string, number: number) {
-      const cacheKey = groupName + number
-
+    handleOrigDest(groupName: string, number: number) {
+      this.currentGroup = groupName
+      this.aggNumber = number
       this.hexStats = null
       this.multiSelectedHexagons = {}
-
-      // const xytitle = this.aggregations[groupName][number]
-      // const x = this.columnLookup.indexOf(xytitle.x)
-      // const y = this.columnLookup.indexOf(xytitle.y)
 
       this.highlightedTrips = []
       this.activeAggregation = `${groupName}~${number}`
 
-      // get element offsets in data array
-      // const col = this.aggregations[item]
-      // this.whichCoords = { x, y }
-
-      // this.requests = this.rawRequests.map(r => [r[x], r[y]]).filter(z => z[0] && z[1])
-      // this.requests = this.rawRequests
-      this.requests = this.rowCache[cacheKey]
       this.colorRamp = this.colorRamps[number]
-    },
-
-    async solveProjection() {
-      if (this.thumbnail) return
-
-      console.log('WHAT PROJECTION:')
-
-      try {
-        const text = await this.fileApi.getFileText(
-          this.myState.subfolder + '/' + this.myState.yamlConfig
-        )
-        this.vizDetails = YAML.parse(text)
-      } catch (e) {
-        console.error(e)
-      }
     },
 
     async getVizDetails() {
@@ -423,13 +385,62 @@ const MyComponent = defineComponent({
       if (hasYaml) {
         await this.loadStandaloneYAMLConfig()
       } else {
-        this.loadOutputTripsConfig()
+        await this.loadOutputTripsConfig()
       }
     },
 
-    loadOutputTripsConfig() {
-      let projection = 'EPSG:31468' // 'EPSG:25832', // 'EPSG:31468', // TODO: fix
-      if (!this.myState.thumbnail) {
+    fetchXML(props: { worker: any; slug: string; filePath: string; options?: any }) {
+      let xmlWorker = props.worker
+
+      xmlWorker.onmessage = (message: MessageEvent) => {
+        // message.data will have .id and either .error or .xml
+        const { resolve, reject } = this.resolvers[message.data.id]
+        xmlWorker.terminate()
+        if (message.data.error) reject(message.data.error)
+        resolve(message.data.xml)
+      }
+      // save the promise by id so we can look it up when we get messages
+      const id = this.resolverId++
+      xmlWorker.postMessage({
+        id,
+        fileSystem: this.fileSystem,
+        filePath: props.filePath,
+        options: props.options,
+      })
+
+      const promise = new Promise((resolve, reject) => {
+        this.resolvers[id] = { resolve, reject }
+      })
+      return promise
+    },
+
+    async figureOutProjection() {
+      const { files } = await this.fileApi.getDirectory(this.myState.subfolder)
+      const outputConfigs = files.filter(
+        f => f.indexOf('.output_config.xml') > -1 || f.indexOf('.output_config_reduced.xml') > -1
+      )
+      if (outputConfigs.length && this.fileSystem) {
+        for (const xmlConfigFileName of outputConfigs) {
+          try {
+            const configXML: any = await this.fetchXML({
+              worker: this._xmlConfigFetcher,
+              slug: this.fileSystem.slug,
+              filePath: this.myState.subfolder + '/' + xmlConfigFileName,
+            })
+            const global = configXML.config.module.filter((f: any) => f.$name === 'global')[0]
+            const crs = global.param.filter((p: any) => p.$name === 'coordinateSystem')[0]
+            const crsValue = crs.$value
+            return crsValue
+          } catch (e) {
+            console.warn('Failed parsing', xmlConfigFileName)
+          }
+        }
+      }
+    },
+
+    async loadOutputTripsConfig() {
+      let projection = await this.figureOutProjection()
+      if (!this.myState.thumbnail && !projection) {
         projection = prompt('Enter projection: e.g. "EPSG:31468"') || 'EPSG:31468'
         if (!!parseInt(projection, 10)) projection = 'EPSG:' + projection
       }
@@ -451,7 +462,6 @@ const MyComponent = defineComponent({
         zoom: this.vizDetails.zoom,
       }
       this.$emit('title', this.vizDetails.title)
-      // this.solveProjection()
       return
     },
 
@@ -478,14 +488,8 @@ const MyComponent = defineComponent({
         this.validateYAML()
         this.setVizDetails()
       } catch (err) {
-        const e = err as any
-        console.log('failed')
-
-        this.$emit('error', {
-          type: Status.ERROR,
-          msg: `File not found`,
-          desc: `Could not find: ${this.myState.subfolder}/${this.myState.yamlConfig}`,
-        })
+        console.error('failed', '' + err)
+        this.$emit('error', `File not found: ${this.myState.subfolder}/${this.myState.yamlConfig}`)
       }
     },
 
@@ -537,21 +541,6 @@ const MyComponent = defineComponent({
       this.$emit('title', t)
     },
 
-    async buildThumbnail() {
-      if (this.thumbnail && this.vizDetails.thumbnail) {
-        try {
-          const blob = await this.fileApi.getFileBlob(
-            this.myState.subfolder + '/' + this.vizDetails.thumbnail
-          )
-          const buffer = await blob.arrayBuffer()
-          const base64 = util.arrayBufferToBase64(buffer)
-          if (base64)
-            this.thumbnailUrl = `center / cover no-repeat url(data:image/png;base64,${base64})`
-        } catch (e) {
-          console.error(e)
-        }
-      }
-    },
     handleShowSelectionButton() {
       const arrays = Object.values(this.multiSelectedHexagons)
       let points: any[] = []
@@ -575,9 +564,7 @@ const MyComponent = defineComponent({
       return { rows: ll, numHexagons: selectedHexes.length, selectedHexagonIds: selectedHexes }
     },
 
-    async setMapCenter() {
-      const data = Object.values(this.rowCache)[0].raw
-
+    setMapCenter() {
       // If user gave us the center, use it
       if (this.vizDetails.center) {
         if (typeof this.vizDetails.center == 'string') {
@@ -585,25 +572,22 @@ const MyComponent = defineComponent({
         }
 
         const view = {
-          longitude: this.vizDetails.center[0],
-          latitude: this.vizDetails.center[1],
+          center: this.vizDetails.center,
+          zoom: this.vizDetails.zoom || 10, // use 10 default if we don't have a zoom
           bearing: 0,
           pitch: 0,
-          zoom: this.vizDetails.zoom || 10, // use 10 default if we don't have a zoom
-          jump: false, // move the map no matter what
         }
-
-        // bounce our map
-        if (REACT_VIEW_HANDLES[this.id]) REACT_VIEW_HANDLES[this.id](view)
 
         // Sets the map to the specified data
         this.$store.commit('setMapCamera', Object.assign({}, view))
-
         return
       }
 
       // user didn't give us the center, so calculate it
-      if (!data.length) return
+      const keys = Object.keys(this.requests)
+      if (!keys.length) return
+
+      const data = this.requests[keys[0]].positions[0]
 
       let samples = 0
       let longitude = 0
@@ -635,62 +619,48 @@ const MyComponent = defineComponent({
       }
     },
 
-    setupLogoMover() {
-      this.resizer = new ResizeObserver(this.moveLogo)
-      const deckmap = document.getElementById(`id-${this.id}`) as HTMLElement
-      this.resizer.observe(deckmap)
-    },
-
-    moveLogo() {
-      const deckmap = document.getElementById(`id-${this.id}`) as HTMLElement
-      const logo = deckmap?.querySelector('.mapboxgl-ctrl-bottom-left') as HTMLElement
-      if (logo) {
-        const right = deckmap.clientWidth > 640 ? '280px' : '36px'
-        logo.style.right = right
-      }
-    },
-
     async parseCSVFile(filename: string) {
       this.myState.statusMessage = 'Loading file...'
 
       // get the raw unzipped arraybuffer
-      this.gzipWorker = new CSVParserWorker()
+      let worker = new CSVParserWorker()
 
-      this.gzipWorker.onmessage = async (buffer: MessageEvent) => {
-        if (buffer.data.status) {
-          this.myState.statusMessage = buffer.data.status
-        } else if (buffer.data.error) {
-          this.myState.statusMessage = buffer.data.error
+      worker.onmessage = async (message: MessageEvent) => {
+        if (message.data.ready) {
+          worker.postMessage({
+            filepath: filename,
+            fileSystem: this.fileSystem,
+            aggregations: this.vizDetails.aggregations,
+            projection: this.vizDetails.projection,
+          })
+          return
+        }
+        if (message.data.status) {
+          this.myState.statusMessage = message.data.status
+        } else if (message.data.projection) {
+          console.log('dataset has a #EPSG:projection, using it', message.data.projection)
+          this.vizDetails.projection = message.data.projection
+        } else if (message.data.error) {
+          this.myState.statusMessage = message.data.error
           this.$emit('error', {
             type: Status.ERROR,
-            msg: `Loading Error`,
-            desc: 'Error loading: ${this.myState.subfolder}/${this.vizDetails.file}',
+            msg: `Error loading: ${this.myState.subfolder}/${this.vizDetails.file}`,
           })
         } else {
-          const { rowCache, columnLookup } = buffer.data
-          if (this.gzipWorker) this.gzipWorker.terminate()
-          this.dataIsLoaded({ rowCache, columnLookup })
+          const { fullRowCache } = message.data
+          this.gzipWorker?.terminate()
+          this.dataIsLoaded({ fullRowCache })
         }
       }
 
-      this.gzipWorker.postMessage({
-        filepath: filename,
-        fileSystem: this.fileSystem,
-        aggregations: this.vizDetails.aggregations,
-        projection: this.vizDetails.projection,
-      })
+      this.gzipWorker = worker
     },
 
-    dataIsLoaded({ rowCache, columnLookup }: any) {
-      this.columnLookup = columnLookup
-      this.rowCache = rowCache
-
-      const agg = this.activeAggregation.replaceAll('~', '')
-      this.requests = this.rowCache[agg]
-
+    dataIsLoaded({ fullRowCache }: any) {
+      this.requests = fullRowCache
       this.setMapCenter()
-      this.moveLogo()
       this.myState.statusMessage = ''
+      this.isLoaded = true
     },
 
     async loadFiles() {
@@ -703,14 +673,11 @@ const MyComponent = defineComponent({
       } catch (e) {
         console.error(e)
         this.myState.statusMessage = '' + e
-        this.$emit('error', {
-          type: Status.ERROR,
-          msg: `Loading/Parsing Error`,
-          desc: 'Error loading/parsing: ${this.myState.subfolder}/${this.vizDetails.file}',
-        })
+        this.$emit('error', `Loading/parsing: ${this.myState.subfolder}/${this.vizDetails.file}`)
       }
     },
   },
+
   async mounted() {
     this.$store.commit('setFullScreen', !this.thumbnail)
 
@@ -718,30 +685,34 @@ const MyComponent = defineComponent({
     this.myState.yamlConfig = this.yamlConfig || ''
     this.myState.subfolder = this.subfolder
 
+    this._xmlConfigFetcher = new NewXmlFetcher()
+
     await this.getVizDetails()
-
-    if (this.thumbnail) return
-
-    this.setupLogoMover()
 
     this.myState.statusMessage = `${this.$i18n.t('loading')}`
     this.aggregations = this.vizDetails.aggregations
 
-    // console.log('loading files')
     await this.loadFiles()
 
-    // this.mapState.center = this.findCenter(this.rawRequests)
+    // background layers
+    try {
+      this.backgroundLayers = new BackgroundLayers({
+        vizDetails: this.vizDetails,
+        fileApi: this.fileApi,
+        subfolder: this.subfolder,
+      })
+      await this.backgroundLayers.initialLoad()
+    } catch (e) {
+      this.$emit('error', 'Error loading background layers')
+    }
 
-    this.buildThumbnail()
-
-    this.isLoaded = true
     this.handleOrigDest(Object.keys(this.aggregations)[0], 0) // show first data
   },
 
   beforeDestroy() {
-    // MUST erase the React view handle to prevent gigantic memory leak!
-    REACT_VIEW_HANDLES[this.id] = undefined
-    delete REACT_VIEW_HANDLES[this.id]
+    if (this._xmlConfigFetcher) this._xmlConfigFetcher.terminate()
+
+    this.resizer?.disconnect()
 
     try {
       if (this.gzipWorker) {
@@ -770,13 +741,6 @@ export default MyComponent
   display: flex;
   flex-direction: column;
   min-height: $thumbnailHeight;
-  background: url('assets/thumbnail.jpg') center / cover no-repeat;
-  z-index: -1;
-}
-
-.xy-hexagons.hide-thumbnail {
-  background: none;
-  z-index: 0;
 }
 
 .message {
@@ -850,6 +814,7 @@ export default MyComponent
   background-color: var(--bgPanel);
   padding: 0.5rem 0.5rem;
   filter: drop-shadow(0px 2px 4px #22222233);
+  z-index: 3;
 }
 
 .is-dashboard {

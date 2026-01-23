@@ -3,20 +3,19 @@ VuePlotly.myplot(
   :data="data"
   :layout="layout"
   :options="options"
-  :id="id"
 )
 </template>
 
 <script lang="ts">
 import { defineComponent } from 'vue'
 import type { PropType } from 'vue'
-import { transpose } from 'mathjs'
 
 import VuePlotly from '@/components/VuePlotly.vue'
 import DashboardDataManager, { FilterDefinition } from '@/js/DashboardDataManager'
 import { DataTable, FileSystemConfig, BG_COLOR_DASHBOARD, UI_FONT, Status } from '@/Globals'
 import globalStore from '@/store'
 import { buildCleanTitle } from './_allPanels'
+import { round } from 'lodash'
 
 export default defineComponent({
   name: 'HeatmapPanel',
@@ -37,7 +36,8 @@ export default defineComponent({
       // dataSet is either x,y or allRows[]
       dataSet: {} as { x?: any[]; y?: any[]; allRows?: DataTable },
       id: ('heatmap-' + Math.floor(1e12 * Math.random())) as any,
-      YAMLrequirementsHeatmap: { dataset: '', y: '', columns: [] },
+      // YAMLrequirementsHeatmap: { dataset: '', y: '', columns: [] },
+      YAMLrequirementsHeatmap: { dataset: '', y: '' },
       layout: {
         margin: { t: 8, b: 50 },
         font: {
@@ -59,6 +59,7 @@ export default defineComponent({
           xanchor: 'right',
           y: 1,
         },
+        annotations: [],
       } as any,
       data: [] as any[],
       options: {
@@ -101,7 +102,10 @@ export default defineComponent({
     this.$emit('isLoaded')
   },
   beforeDestroy() {
-    this.datamanager?.removeFilterListener(this.config, this.handleFilterChanged)
+    this.datamanager?.removeFilterListener(
+      { ...this.config, subfolder: this.subfolder },
+      this.handleFilterChanged
+    )
   },
 
   watch: {
@@ -164,13 +168,16 @@ export default defineComponent({
     async loadData() {
       try {
         this.validateYAML()
-        let dataset = await this.datamanager.getDataset(this.config)
+        let dataset = await this.datamanager.getDataset(this.config, { subfolder: this.subfolder })
 
         // no filter? we are done
         if (!this.config.filters) return dataset
 
         // filter data before returning:
-        this.datamanager.addFilterListener(this.config, this.handleFilterChanged)
+        this.datamanager.addFilterListener(
+          { ...this.config, subfolder: this.subfolder },
+          this.handleFilterChanged
+        )
 
         for (const [column, value] of Object.entries(this.config.filters)) {
           const filter: FilterDefinition = {
@@ -184,6 +191,7 @@ export default defineComponent({
         // empty for now; filtered data will come back later via handleFilterChanged async.
         return { allRows: {} }
       } catch (e) {
+        this.$emit('error', `Error loading: ${this.subfolder}/${this.config.dataset}`)
         console.error('' + e)
       }
       return { allRows: {} }
@@ -228,7 +236,20 @@ export default defineComponent({
 
       const allRows = this.dataSet.allRows || ({} as any)
 
-      const columns = this.config.columns || this.config.usedCol || []
+      let columns = this.config.columns || this.config.usedCol || []
+
+      // Add all columns except the y column if no columns are specified
+      if (!columns.length) {
+        let allColumns = Object.keys(allRows)
+        const y = this.config.y
+
+        const index = allColumns.indexOf(y, 0)
+        if (index > -1) {
+          allColumns.splice(index, 1)
+        }
+        columns = allColumns
+      }
+
       if (!columns.length) return
 
       // check for valid columns
@@ -256,12 +277,16 @@ export default defineComponent({
       }
 
       // Converts all data to the matrix format of the heatmap
-      let i = 0
-      for (const column of this.config.columns) {
-        matrix[i++] = allRows[column].values
+      for (let i = 0; i < columns.length; i++) {
+        matrix[i] = allRows[columns[i]].values
       }
 
-      if (!this.config.flipAxes) matrix = transpose(matrix)
+      if (!this.config.flipAxes) {
+        // Transposes the matrix to get the same orientation as in the .csv file
+        yaxis = yaxis.reverse()
+        this.transpose(matrix)
+        matrix = matrix.reverse()
+      }
 
       // Pushes the data into the chart
       this.data = [
@@ -274,6 +299,39 @@ export default defineComponent({
           automargin: true,
         },
       ]
+
+      if (this.config.showLabels) {
+        // Clear all annotations
+        this.layout.annotations.length = 0
+
+        const d = this.data[0]
+        for (let i = 0; i < d.x.length; i++) {
+          for (let j = 0; j < d.y.length; j++) {
+            const result = {
+              x: d.x[i],
+              y: d.y[j],
+              text: round(d.z[j][i], 2),
+              showarrow: false,
+              font: {
+                family: 'Arial Black',
+                size: 12,
+                color: 'white',
+              },
+            }
+            this.layout.annotations.push(result)
+          }
+        }
+      }
+    },
+
+    transpose(matrix: any) {
+      for (let i = 0; i < matrix.length; i++) {
+        for (let j = 0; j < i; j++) {
+          const tmp = matrix[i][j]
+          matrix[i][j] = matrix[j][i]
+          matrix[j][i] = tmp
+        }
+      }
     },
 
     // Check this plot for warnings and errors

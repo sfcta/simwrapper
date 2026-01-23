@@ -4,19 +4,38 @@ import { AsyncComponent, defineAsyncComponent } from 'vue'
 
 const plugins = [
   {
-    kebabName: 'xmas-kelheim',
-    filePatterns: ['**/xmas-kelheim*.y?(a)ml'],
-    component: defineAsyncComponent(() => import('./xmas-kelheim/VehicleAnimation.vue')),
+    kebabName: 'layers',
+    filePatterns: ['**/viz-layers*.y?(a)ml'],
+    component: defineAsyncComponent(() => import('./layer-map/LayerMap.vue')),
   },
   {
-    kebabName: 'x-y-t',
+    kebabName: 'xytime',
     filePatterns: ['**/viz-xyt-*.y?(a)ml', '**/*xyt.csv?(.gz)'],
     component: defineAsyncComponent(() => import('./xy-time/XyTime.vue')),
   },
   {
+    kebabName: 'layer-map',
+    filePatterns: [],
+    component: defineAsyncComponent(() => import('./layer-map/LayerMap.vue')),
+  },
+  {
     kebabName: 'area-map',
-    filePatterns: ['**/viz-map*.y?(a)ml', '**/*.geojson?(.gz)', '**/*.shp'],
+    filePatterns: [
+      '**/viz-map*.y?(a)ml',
+      '**/*.geojson?(.gz)',
+      '**/*network*.avro',
+      '**/*network.xml?(.gz)',
+      '**/*.shp',
+      '**/*.gpkg',
+      '**/*.gmns',
+      '**/*.gmns.zip',
+    ],
     component: defineAsyncComponent(() => import('./shape-file/ShapeFile.vue')),
+  },
+  {
+    kebabName: 'pie-layer',
+    filePatterns: ['**/viz-pie*.y?(a)ml*'],
+    component: defineAsyncComponent(() => import('./pie-chart/PieChartDemo.vue')),
   },
   {
     kebabName: 'carriers',
@@ -24,12 +43,12 @@ const plugins = [
     component: defineAsyncComponent(() => import('./carrier-viewer/CarrierViewer.vue')),
   },
   {
-    kebabName: 'grid-map',
+    kebabName: 'gridmap',
     filePatterns: ['**/viz-grid*.y?(a)ml'],
     component: defineAsyncComponent(() => import('./grid-map/GridMap.vue')),
   },
   {
-    kebabName: 'vehicle-view',
+    kebabName: 'vehicles',
     filePatterns: ['**/viz-vehicles*.y?(a)ml'],
     component: defineAsyncComponent(() => import('./vehicle-animation/VehicleAnimation.vue')),
   },
@@ -39,16 +58,17 @@ const plugins = [
     component: defineAsyncComponent(() => import('./calculation-table/CalculationTable.vue')),
   },
   {
-    kebabName: 'xy-hexagons',
+    kebabName: 'hexagons',
     filePatterns: ['**/viz-xy-*.y?(a)ml', '*output_trips.csv?(.gz)'],
     component: defineAsyncComponent(() => import('./xy-hexagons/XyHexagons.vue')),
   },
   {
-    kebabName: 'network',
+    kebabName: 'links',
     component: defineAsyncComponent(() => import('./links-gl/NetworkLinks.vue')),
     filePatterns: [
-      '**/*network.xml?(.gz)',
-      '**/*network.geo?(.)json?(.gz)',
+      // deprecated! Use shapefile/map viewer instead
+      // '**/*network.xml?(.gz)',
+      // '**/*network.geo?(.)json?(.gz)',
       '**/viz-gl-link*.y?(a)ml',
       '**/viz-link*.y?(a)ml',
     ],
@@ -59,7 +79,7 @@ const plugins = [
     component: defineAsyncComponent(() => import('./transit-demand/TransitDemand.vue')),
   },
   {
-    kebabName: 'aggregate-od',
+    kebabName: 'aggregate',
     filePatterns: ['**/viz-od*.y?(a)ml'],
     component: defineAsyncComponent(() => import('./aggregate-od/AggregateOd.vue')),
   },
@@ -69,12 +89,17 @@ const plugins = [
     component: defineAsyncComponent(() => import('./flowmap/Flowmap.vue')),
   },
   {
-    kebabName: 'plotly',
-    filePatterns: ['**/plotly*.y?(a)ml'],
-    component: defineAsyncComponent(() => import('./flowmap/Flowmap.vue')),
+    kebabName: 'matrix',
+    filePatterns: ['**/viz-matrix*.y?(a)ml', '**/*.h5', '**/*.omx'],
+    component: defineAsyncComponent(() => import('./matrix/MatrixViewer.vue')),
   },
   {
-    kebabName: 'vega-chart',
+    kebabName: 'plotly',
+    filePatterns: ['**/plotly*.y?(a)ml'],
+    component: defineAsyncComponent(() => import('./plotly/PlotlyDiagram.vue')),
+  },
+  {
+    kebabName: 'vega',
     filePatterns: ['**/*.vega.json'],
     component: defineAsyncComponent(() => import('./vega-lite/VegaLite.vue')),
   },
@@ -99,13 +124,29 @@ const plugins = [
     component: defineAsyncComponent(() => import('./video-player/VideoPlayer.vue')),
   },
   {
-    kebabName: 'xml-config',
+    kebabName: 'xml',
     filePatterns: ['**/*config*.xml*'],
     component: defineAsyncComponent(() => import('./xml-viewer/XmlViewer.vue')),
+  },
+  {
+    kebabName: 'xmas-kelheim',
+    filePatterns: ['**/xmas-kelheim*.y?(a)ml'],
+    component: defineAsyncComponent(() => import('./xmas-kelheim/VehicleAnimation.vue')),
+  },
+  {
+    kebabName: 'logistics',
+    filePatterns: [
+      '**/*lsps.xml*',
+      '**/viz-logistic*.y?(a)ml*',
+      '**/viz-lsps*.y?(a)ml*',
+      '**/viz-logistik*.y?(a)ml*',
+    ],
+    component: defineAsyncComponent(() => import('./logistics/LogisticsViewer.vue')),
   },
 ]
 
 export const pluginComponents: { [key: string]: AsyncComponent } = {}
+
 plugins.forEach(p => {
   pluginComponents[p.kebabName] = p.component
 })

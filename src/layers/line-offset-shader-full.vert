@@ -1,32 +1,23 @@
+#version 300 es
 #define SHADER_NAME line-layer-vertex-shader
 
-attribute vec3 positions;
-attribute vec3 instanceSourcePositions;
-attribute vec3 instanceTargetPositions;
-attribute vec3 instanceSourcePositions64Low;
-attribute vec3 instanceTargetPositions64Low;
-attribute vec4 instanceColors;
-attribute vec3 instancePickingColors;
-attribute float instanceWidths;
+in vec3 positions;
+in vec3 instanceSourcePositions;
+in vec3 instanceTargetPositions;
+in vec3 instanceSourcePositions64Low;
+in vec3 instanceTargetPositions64Low;
+in vec4 instanceColors;
+in vec3 instancePickingColors;
+in float instanceWidths;
 
-uniform float opacity;
-uniform float widthScale;
-uniform float widthMinPixels;
-uniform float widthMaxPixels;
-uniform float useShortestPath;
-uniform int widthUnits;
-
-uniform float offsetDirection;
-uniform float bearing;
-
-varying vec4 vColor;
-varying vec2 uv;
+out vec4 vColor;
+out vec2 uv;
 
 // offset vector by strokeWidth pixels
 // offset_direction is -1 (left) or 1 (right)
 vec2 getExtrusionOffset(vec2 line_clipspace, float offset_direction, float width) {
   // normalized direction of the line
-  vec2 dir_screenspace = normalize(line_clipspace * project_uViewportSize);
+  vec2 dir_screenspace = normalize(line_clipspace * project.viewportSize);
   // rotate by 90 degrees
   dir_screenspace = vec2(-dir_screenspace.y, dir_screenspace.x);
 
@@ -38,29 +29,6 @@ vec3 splitLine(vec3 a, vec3 b, float x) {
   return vec3(x, mix(a.yz, b.yz, t));
 }
 
-void drivingSideOffset(inout vec3 size, float widthPixels) {
-
-    // a -> b
-    vec3 link = geometry.worldPositionAlt.xyz - geometry.worldPosition.xyz;
-
-    // normalized direction of the line
-    vec2 direction = normalize(link.xy * project_uViewportSize);
-
-    // rotate by map bearing
-    vec2 rotation;
-    rotation.x = direction.x * cos(bearing) + direction.y * -sin(bearing);
-    rotation.y = direction.x * sin(bearing) + direction.y *  cos(bearing);
-
-    // rotate by 90 degrees to get offset direction
-    rotation = vec2(-rotation.y, rotation.x);
-
-    // offset the coordinates
-    vec2 offset = rotation * offsetDirection * widthPixels / 2.0;
-
-    size.x += offset.x;
-    size.y += offset.y;
-}
-
 void main(void) {
   geometry.worldPosition = instanceSourcePositions;
   geometry.worldPositionAlt = instanceTargetPositions;
@@ -70,20 +38,20 @@ void main(void) {
   vec3 source_world_64low = instanceSourcePositions64Low;
   vec3 target_world_64low = instanceTargetPositions64Low;
 
-  if (useShortestPath > 0.5 || useShortestPath < -0.5) {
+  if (line.useShortestPath > 0.5 || line.useShortestPath < -0.5) {
     source_world.x = mod(source_world.x + 180., 360.0) - 180.;
     target_world.x = mod(target_world.x + 180., 360.0) - 180.;
     float deltaLng = target_world.x - source_world.x;
 
-    if (deltaLng * useShortestPath > 180.) {
-      source_world.x += 360. * useShortestPath;
-      source_world = splitLine(source_world, target_world, 180. * useShortestPath);
+    if (deltaLng * line.useShortestPath > 180.) {
+      source_world.x += 360. * line.useShortestPath;
+      source_world = splitLine(source_world, target_world, 180. * line.useShortestPath);
       source_world_64low = vec3(0.0);
-    } else if (deltaLng * useShortestPath < -180.) {
-      target_world.x += 360. * useShortestPath;
-      target_world = splitLine(source_world, target_world, 180. * useShortestPath);
+    } else if (deltaLng * line.useShortestPath < -180.) {
+      target_world.x += 360. * line.useShortestPath;
+      target_world = splitLine(source_world, target_world, 180. * line.useShortestPath);
       target_world_64low = vec3(0.0);
-    } else if (useShortestPath < 0.) {
+    } else if (line.useShortestPath < 0.) {
       // Line is not split, abort
       gl_Position = vec4(0.);
       return;
@@ -106,22 +74,33 @@ void main(void) {
 
   // Multiply out width and clamp to limits
   float widthPixels = clamp(
-    project_size_to_pixel(instanceWidths * widthScale, widthUnits),
-    widthMinPixels, widthMaxPixels
+    project_size_to_pixel(instanceWidths * line.widthScale, line.widthUnits),
+    line.widthMinPixels, line.widthMaxPixels
   );
 
-  // extrude
-  vec3 offset = vec3(
-    getExtrusionOffset(target.xy - source.xy, positions.y, widthPixels),
-    0.0);
+  // --- extrude: shift the whole stroke to the RIGHT so inner edge sits on the centerline ---
+  // Compute screen-space normal (pixels)
+  vec2 dir_clipspace = target.xy - source.xy;
+  vec2 dir_screenspace = normalize(dir_clipspace * project.viewportSize);
+  vec2 normal_screenspace = vec2(-dir_screenspace.y, dir_screenspace.x);
 
-  drivingSideOffset(offset, 1.0 + widthPixels);
+  // Map positions.y (-1 or +1) -> sideFactor (0 or 1):
+  //  - positions.y == -1 => sideFactor = 0  (inner edge, on the centerline)
+  //  - positions.y == +1 => sideFactor = 1  (outer edge, widthPixels away to the right)
+  float sideFactor = udata.offsetDirection * (positions.y + 1.0) * 0.5;
 
+  // Final offset in *pixels*
+  vec2 offset_pixels = normal_screenspace * sideFactor * widthPixels;
+
+  // If the stroke ends up on the left instead of the right, flip the normal:
+  // offset_pixels = -offset_pixels;
+
+  vec3 offset = vec3(offset_pixels, 0.0);
   DECKGL_FILTER_SIZE(offset, geometry);
+  DECKGL_FILTER_GL_POSITION(p, geometry);
   gl_Position = p + vec4(project_pixel_size_to_clipspace(offset.xy), 0.0, 0.0);
-  DECKGL_FILTER_GL_POSITION(gl_Position, geometry);
 
   // Color
-  vColor = vec4(instanceColors.rgb, instanceColors.a * opacity);
+  vColor = vec4(instanceColors.rgb, instanceColors.a * layer.opacity);
   DECKGL_FILTER_COLOR(vColor, geometry);
 }

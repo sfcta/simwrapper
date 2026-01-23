@@ -3,7 +3,6 @@ VuePlotly.myplot(v-if="data[0].values.length"
   :data="data"
   :layout="layout"
   :options="options"
-  :id="id"
 )
 </template>
 
@@ -16,6 +15,7 @@ import VuePlotly from '@/components/VuePlotly.vue'
 import { FileSystemConfig, Status, BG_COLOR_DASHBOARD, UI_FONT } from '@/Globals'
 import globalStore from '@/store'
 import { buildCleanTitle } from './_allPanels'
+import { buildColors } from '@/js/ColorsAndWidths'
 
 export default defineComponent({
   name: 'PieChartPanel',
@@ -36,6 +36,7 @@ export default defineComponent({
       // dataSet is either x,y or allRows[]
       dataSet: {} as { x?: any[]; y?: any[]; allRows?: any },
       YAMLrequirementsPie: { dataset: '', useLastRow: '' },
+      colorMap: {} as { [category: string]: string },
       layout: {
         height: 300,
         margin: { t: 4, b: 4, l: 0, r: 0, pad: 2 },
@@ -74,6 +75,7 @@ export default defineComponent({
           textinfo: 'label+percent',
           textposition: 'inside',
           automargin: true,
+          marker: undefined as any,
         },
       ],
       options: {
@@ -114,7 +116,10 @@ export default defineComponent({
     this.$emit('isLoaded')
   },
   beforeDestroy() {
-    this.datamanager?.removeFilterListener(this.config, this.handleFilterChanged)
+    this.datamanager?.removeFilterListener(
+      { ...this.config, subfolder: this.subfolder },
+      this.handleFilterChanged
+    )
   },
 
   watch: {
@@ -122,6 +127,7 @@ export default defineComponent({
       this.updateTheme()
     },
   },
+
   methods: {
     changeDimensions(dimensions: { width: number; height: number }) {
       this.layout = Object.assign({}, this.layout, dimensions)
@@ -161,13 +167,16 @@ export default defineComponent({
     async loadData() {
       try {
         this.validateYAML()
-        let dataset = await this.datamanager.getDataset(this.config)
+        let dataset = await this.datamanager.getDataset(this.config, { subfolder: this.subfolder })
 
         // no filter? we are done
         if (!this.config.filters) return dataset
 
         // filter data before returning:
-        this.datamanager.addFilterListener(this.config, this.handleFilterChanged)
+        this.datamanager.addFilterListener(
+          { ...this.config, subfolder: this.subfolder },
+          this.handleFilterChanged
+        )
 
         for (const [column, value] of Object.entries(this.config.filters)) {
           const filter: FilterDefinition = {
@@ -181,6 +190,7 @@ export default defineComponent({
         // empty for now; filtered data will come back later via handleFilterChanged async.
         return { allRows: {} }
       } catch (e) {
+        this.$emit('error', `Error loading: ${this.subfolder}/${this.config.dataset}`)
         console.error('' + e)
       }
       return { allRows: {} }
@@ -219,8 +229,14 @@ export default defineComponent({
     updateChartSimple() {
       const allRows = this.dataSet.allRows || {}
 
-      this.data[0].labels = Object.keys(allRows)
+      const keys = Object.keys(allRows)
+      this.data[0].labels = keys
       this.data[0].values = Object.values(allRows)
+
+      // build colors for all alternatives
+      const categories = this.config.categories || [...new Set(keys)]
+      this.colorMap = buildColors(categories, this.config.colorRamp)
+      this.data[0].marker = { colors: keys.map((v: any) => this.colorMap[v]) }
     },
   },
 })

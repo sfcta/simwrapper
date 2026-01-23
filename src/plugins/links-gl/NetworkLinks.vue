@@ -3,7 +3,7 @@
         :style='{"background": urlThumbnail}'
         oncontextmenu="return false")
 
-  .plot-container(v-if="!thumbnail" :id="`container-${linkLayerId}`")
+  .plot-container(v-if="!thumbnail")
     link-gl-layer.map-area(
         :viewId="linkLayerId"
         :links="geojsonData"
@@ -18,6 +18,7 @@
         :scaleWidth="scaleWidth"
         :projection="vizDetails.projection"
         :mapIsIndependent="vizDetails.mapIsIndependent"
+        :bgLayers="backgroundLayers"
     )
 
     zoom-buttons(v-if="!thumbnail")
@@ -29,7 +30,7 @@
       :datasets="datasets"
       :fileSystem="fileSystem"
       :subfolder="myState.subfolder"
-      :yamlConfig="yamlConfig"
+      :yamlConfig="config"
       :legendStore="legendStore"
       :filterDefinitions="currentUIFilterDefinitions"
       @update="changeConfiguration")
@@ -40,9 +41,6 @@
     //-     p {{ vizDetails.description }}
 
     .bottom-panel(v-if="!thumbnail")
-      .status-message(v-if="myState.statusMessage")
-        p {{ myState.statusMessage }}
-
       .panel-items(v-show="csvWidth.activeColumn")
 
         //- slider/dropdown for selecting column
@@ -67,6 +65,8 @@
         //-   :props="csvWidth"
         //-   @activeColumns="handleNewFilter"
         //- )
+      .status-message(v-if="myState.statusMessage")
+        p {{ myState.statusMessage }}
 
 </template>
 
@@ -107,7 +107,7 @@ import globalStore from '@/store'
 import { MAP_STYLES_OFFLINE, DataTableColumn, DataTable, DataType, LookupDataset } from '@/Globals'
 // import FilterPanel from './BadFilterPanel.vue'
 import SelectorPanel from './SelectorPanel.vue'
-import LinkGlLayer from './LinkLayer'
+import LinkGlLayer from './DeckMapComponent.vue'
 import HTTPFileSystem from '@/js/HTTPFileSystem'
 import DrawingTool from '@/components/DrawingTool/DrawingTool.vue'
 import VizConfigurator from '@/components/viz-configurator/VizConfigurator.vue'
@@ -116,19 +116,13 @@ import LegendStore from '@/js/LegendStore'
 import Coords from '@/js/Coords'
 import { arrayBufferToBase64 } from '@/js/util'
 
-import {
-  ColorScheme,
-  FileSystem,
-  FileSystemConfig,
-  VisualizationPlugin,
-  Status,
-  REACT_VIEW_HANDLES,
-} from '@/Globals'
+import { ColorScheme, FileSystem, FileSystemConfig, VisualizationPlugin, Status } from '@/Globals'
 
 import { LineColorDefinition } from '@/components/viz-configurator/LineColors.vue'
 import { LineWidthDefinition } from '@/components/viz-configurator/LineWidths.vue'
 import { DatasetDefinition } from '@/components/viz-configurator/AddDatasets.vue'
 import DashboardDataManager from '@/js/DashboardDataManager'
+import BackgroundLayers from '@/js/BackgroundLayers'
 
 const LOOKUP_COLUMN = '_LINK_OFFSET_'
 
@@ -180,6 +174,8 @@ const MyComponent = defineComponent({
         },
       },
 
+      backgroundLayers: null as null | BackgroundLayers,
+
       YAMLrequirementsLinks: {
         // csvFile: '',
         // network: '',
@@ -218,7 +214,7 @@ const MyComponent = defineComponent({
       currentUIFilterDefinitions: {} as any,
       datasets: {} as { [id: string]: DataTable },
       isButtonActiveColumn: false,
-      linkLayerId: `linklayer-${Math.floor(1e12 * Math.random())}` as any,
+      linkLayerId: Math.floor(1e12 * Math.random()),
       scaleWidth: 0,
       numLinks: 0,
       showTimeRange: false,
@@ -226,7 +222,7 @@ const MyComponent = defineComponent({
       geojsonData: {
         source: new Float32Array(),
         dest: new Float32Array(),
-        linkIds: [] as any[],
+        linkId: [] as any[],
         projection: '',
       },
       fixedColors: ['#4e79a7'],
@@ -317,9 +313,6 @@ const MyComponent = defineComponent({
   watch: {
     '$store.state.viewState'() {
       if (this.vizDetails.mapIsIndependent) return
-
-      if (!REACT_VIEW_HANDLES[this.linkLayerId]) return
-      REACT_VIEW_HANDLES[this.linkLayerId]()
     },
 
     '$store.state.colorScheme'() {
@@ -391,6 +384,8 @@ const MyComponent = defineComponent({
         // maybe it failed because password?
         if (this.fileSystem.needPassword && e.status === 401) {
           this.$store.commit('requestLogin', this.fileSystem.slug)
+        } else {
+          this.$emit('error', '' + e)
         }
       }
     },
@@ -401,10 +396,10 @@ const MyComponent = defineComponent({
       let configuration: any
 
       if (hasYaml) {
-        console.log('has yaml')
+        console.log('--has viz-*.yaml')
         configuration = this.standaloneYAMLconfig
       } else {
-        console.log('no yaml')
+        console.log('--no yaml, config came from dashboard')
         configuration = this.config
       }
 
@@ -418,30 +413,26 @@ const MyComponent = defineComponent({
         }
       }
 
-      if (configuration.zoom < 5 || configuration.zoom > 20) {
-        this.$emit('error', {
-          type: Status.WARNING,
-          msg: `Zoom is out of the recommended range `,
-          desc: 'Zoom levels should be between 5 and 20. ',
-        })
+      // if (configuration.zoom < 5 || configuration.zoom > 20) {
+      //   this.$emit('error', {
+      //     type: Status.WARNING,
+      //     msg: `Zoom is out of the recommended range `,
+      //     desc: 'Zoom levels should be between 5 and 20. ',
+      //   })
+      // }
+
+      const isMissingNetwork = !configuration.network && !configuration.geojsonFile
+      if (isMissingNetwork) {
+        this.$emit('error', 'Network file not specified')
       }
 
-      const hasGeoJson = !configuration.network && configuration.geojsonFile
-      if (hasGeoJson) {
-        this.$emit('error', {
-          type: Status.WARNING,
-          msg: `YAML field geojsonFile deprecated`,
-          desc: 'Use YAML field network instad. ',
-        })
-      }
-
-      if (!configuration.display) {
-        this.$emit('error', {
-          type: Status.WARNING,
-          msg: `Display properties not set`,
-          desc: 'Standard values are used',
-        })
-      }
+      // if (!configuration.display) {
+      //   this.$emit('error', {
+      //     type: Status.WARNING,
+      //     msg: `Display properties not set`,
+      //     desc: 'Standard values are used',
+      //   })
+      // }
     },
 
     setVizDetails() {
@@ -648,9 +639,9 @@ const MyComponent = defineComponent({
       }
 
       // bounce our map
-      if (REACT_VIEW_HANDLES[this.linkLayerId]) {
-        REACT_VIEW_HANDLES[this.linkLayerId](view)
-      }
+      // if (REACT_VIEW_HANDLES[this.linkLayerId]) {
+      //   REACT_VIEW_HANDLES[this.linkLayerId](view)
+      // }
     },
 
     async setMapCenter() {
@@ -688,21 +679,6 @@ const MyComponent = defineComponent({
       })
     },
 
-    setupLogoMover() {
-      this.resizer = new ResizeObserver(this.moveLogo)
-      const deckmap = document.getElementById(`container-${this.linkLayerId}`) as HTMLElement
-      this.resizer.observe(deckmap)
-    },
-
-    moveLogo() {
-      const deckmap = document.getElementById(`container-${this.linkLayerId}`) as HTMLElement
-      const logo = deckmap?.querySelector('.mapboxgl-ctrl-bottom-left') as HTMLElement
-      if (logo) {
-        const right = deckmap.clientWidth > 640 ? '280px' : '36px'
-        logo.style.right = right
-      }
-    },
-
     async updateStatus(message: string) {
       this.myState.statusMessage = message
     },
@@ -713,6 +689,12 @@ const MyComponent = defineComponent({
       this.myState.statusMessage = 'Loading network...'
 
       const filename = this.vizDetails.network || this.vizDetails.geojsonFile
+      if (!filename) {
+        this.myState.statusMessage = ''
+        this.$emit('isLoaded')
+        return
+      }
+
       try {
         const network = await this.myDataManager.getRoadNetwork(
           filename,
@@ -721,7 +703,7 @@ const MyComponent = defineComponent({
           this.updateStatus
         )
 
-        this.numLinks = network.linkIds.length
+        this.numLinks = network.linkId.length
         this.geojsonData = network as any
 
         // Handle Atlantis: no long/lat coordinates
@@ -734,23 +716,32 @@ const MyComponent = defineComponent({
 
         this.myState.statusMessage = ''
 
-        this.moveLogo()
-
         this.$emit('isLoaded', true)
 
         // then load CSVs in background
         this.loadCSVFiles()
       } catch (e) {
-        this.myState.statusMessage = '' + e
-        const title = this.vizDetails.title || 'Network map'
-        this.$emit('error', `${title}: ` + e)
+        this.myState.statusMessage = ''
+        this.$emit('error', `` + e)
         this.$emit('isLoaded')
       }
     },
 
+    generateUniqueDatasetKeyFromFilename(name: string) {
+      if (!(name in this.datasets)) return name
+      console.log(name, 'not unique')
+      for (let i = 2; i < 100; i++) {
+        let newName = `${name}_${i}`
+        if (!(newName in this.datasets)) return newName
+      }
+      return `${name}__${Math.floor(100 + 1e5 * Math.random())}`
+    },
+
     handleNewDataset(props: DatasetDefinition) {
-      console.log('NEW dataset', props)
+      // console.log('NEW dataset', props)
       const { key, dataTable, filename } = props
+      const uniqueKey = this.generateUniqueDatasetKeyFromFilename(key)
+      // console.log('UNIQUE', key, uniqueKey)
 
       // We need a lookup so we can find the CSV row that matches each link row.
       // A normal hashmap lookup is too slow, so we'll create an array containing
@@ -769,24 +760,24 @@ const MyComponent = defineComponent({
       // Create a LOOKUP array which links this CSV data to the network links
       // loop through all network links, we need the CSV row for each link.
       const getCsvRowNumberFromLinkRowNumber: number[] = []
-      for (let linkRow = 0; linkRow < this.geojsonData.linkIds.length; linkRow++) {
-        const linkId = this.geojsonData.linkIds[linkRow]
+      for (let linkRow = 0; linkRow < this.geojsonData.linkId.length; linkRow++) {
+        const linkId = this.geojsonData.linkId[linkRow]
         const csvRow = tempMapLinkIdToCsvRow[linkId]
         if (csvRow !== undefined) getCsvRowNumberFromLinkRowNumber[linkRow] = csvRow
       }
 
       // Save the lookup with the dataset.
-      this.csvRowLookupFromLinkRow[key] = getCsvRowNumberFromLinkRowNumber
+      this.csvRowLookupFromLinkRow[uniqueKey] = getCsvRowNumberFromLinkRowNumber
       tempMapLinkIdToCsvRow = {} // probably unnecessary but we def want this to be GC'ed
 
       // all done!
-      if (filename) this.vizDetails.datasets[key] = filename
-      this.datasets = Object.assign({ ...this.datasets }, { [key]: dataTable })
-      this.handleDatasetisLoaded(key)
+      if (filename) this.vizDetails.datasets[uniqueKey] = filename
+      this.datasets = Object.assign({ ...this.datasets }, { [uniqueKey]: dataTable })
+      this.handleDatasetisLoaded(uniqueKey)
     },
 
     generateWidthArray() {
-      const numLinks = this.geojsonData.linkIds.length
+      const numLinks = this.geojsonData.linkId.length
       const widths = new Float32Array(numLinks)
 
       const widthValues = this.csvWidth?.dataTable[this.csvWidth.activeColumn]?.values
@@ -844,7 +835,7 @@ const MyComponent = defineComponent({
         ? scaleOrdinal().range(colorsAsRGB)
         : scaleThreshold().range(colorsAsRGB).domain(domain)
 
-      const numLinks = this.geojsonData.linkIds.length
+      const numLinks = this.geojsonData.linkId.length
       const colors = new Uint8Array(4 * numLinks)
 
       const colorPaleGrey = globalStore.state.isDarkMode ? [80, 80, 80, 96] : [212, 212, 212, 40]
@@ -977,13 +968,16 @@ const MyComponent = defineComponent({
       if (datasetKeys.length === Object.keys(this.vizDetails.datasets).length) {
         this.setDataIsLoaded()
         this.myState.statusMessage = ''
-        console.log({ DATASETS: this.datasets })
+        // console.log('DATASETS:', Object.keys(this.datasets))
       }
     },
 
     async loadOneCSVFile(key: string, filename: string) {
       try {
-        const dataset = await this.myDataManager.getDataset({ dataset: filename })
+        const dataset = await this.myDataManager.getDataset(
+          { dataset: filename },
+          { subfolder: this.subfolder }
+        )
         const dataTable = dataset.allRows
 
         console.log('loaded', key)
@@ -995,7 +989,6 @@ const MyComponent = defineComponent({
           if (key) cleanTable[key] = dataTable[key]
         }
 
-        this.datasets = Object.assign({ ...this.datasets }, { [key]: cleanTable })
         this.handleNewDataset({ key, dataTable: cleanTable })
       } catch (e) {
         this.$emit('error', 'Could not load ' + filename)
@@ -1045,15 +1038,25 @@ const MyComponent = defineComponent({
       return
     }
 
-    this.setupLogoMover()
-
     // load network; when it is done it will call the loadCSVs afterwards.
     this.loadNetwork()
+
+    // background layers
+    try {
+      this.backgroundLayers = new BackgroundLayers({
+        vizDetails: this.vizDetails,
+        fileApi: this.fileApi,
+        subfolder: this.subfolder,
+      })
+      await this.backgroundLayers.initialLoad()
+    } catch (e) {
+      this.$emit('error', 'Error loading background layers')
+    }
   },
 
   beforeDestroy() {
+    this.resizer?.disconnect()
     // MUST delete the React view handle to prevent gigantic memory leak!
-    delete REACT_VIEW_HANDLES[this.linkLayerId]
 
     try {
       for (const worker of this.dataLoaderWorkers) worker.terminate()
@@ -1112,9 +1115,10 @@ export default MyComponent
   display: flex;
   flex-direction: column;
   font-size: 0.8rem;
-  pointer-events: auto;
+  pointer-events: none;
   margin: auto 0.5rem 2px 7px;
   filter: drop-shadow(0px 2px 4px #22222233);
+  z-index: 5;
 }
 
 .status-message {
@@ -1124,6 +1128,7 @@ export default MyComponent
   background-color: var(--bgPanel);
   font-size: 1.2rem;
   line-height: 1.5rem;
+  z-index: 10;
 }
 
 .right-side {
@@ -1142,7 +1147,7 @@ export default MyComponent
   background-color: var(--bgPanel);
   border-radius: 3px;
   overflow: visible;
-  // overflow-x: hidden;
+  pointer-events: auto;
 }
 
 .panel-item {
